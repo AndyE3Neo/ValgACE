@@ -11,8 +11,8 @@ fi
 
 # Пути по умолчанию
 KLIPPER_HOME="${HOME}/klipper"
-KLIPPER_CONFIG_HOME="${HOME}/printer_data/config"
-MOONRAKER_CONFIG_DIR="${HOME}/printer_data/config"
+KLIPPER_CONFIG_HOME="${HOME}/printer_2_data/config"
+MOONRAKER_CONFIG_DIR="${HOME}/printer_2_data/config"
 SRCDIR="$PWD"
 KLIPPER_ENV="${HOME}/klippy-env/bin"
 
@@ -25,8 +25,8 @@ if [ "$IS_MIPS" -eq 1 ]; then
 fi
 
 # Имена сервисов
-KLIPPER_SERVICE="klipper"
-MOONRAKER_SERVICE="moonraker"
+KLIPPER_SERVICE="klipper-2"
+MOONRAKER_SERVICE="moonraker-2"
 
 usage() { 
     echo "Usage: $0 [-u] [-h] [-v]" 1>&2
