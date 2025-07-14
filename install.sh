@@ -210,7 +210,7 @@ add_updater() {
 type: git_repo
 path: ${SRCDIR}
 primary_branch: main
-origin: https://github.com/agrloki/ValgACE.git
+origin: https://github.com/andye3neo/ValgACE.git
 managed_services: klipper
 EOF
 
