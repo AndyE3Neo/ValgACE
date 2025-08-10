@@ -43,6 +43,7 @@ class ValgAce:
         self.park_hit_count = config.getint('park_hit_count', 5)
         self.max_dryer_temperature = config.getint('max_dryer_temperature', 55)
         self.disable_assist_after_toolchange = config.getboolean('disable_assist_after_toolchange', True)
+        self.infinity_spool_mode = config.getboolean('infinity_spool_mode', False)
 
         # Состояние устройства
         self._info = self._get_default_info()
@@ -120,6 +121,7 @@ class ValgAce:
             ('ACE_UPDATE_RETRACT_SPEED', self.cmd_ACE_UPDATE_RETRACT_SPEED, "Update retracting speed"),
             ('ACE_STOP_RETRACT', self.cmd_ACE_STOP_RETRACT, "Stop retract filament"),
             ('ACE_CHANGE_TOOL', self.cmd_ACE_CHANGE_TOOL, "Change tool"),
+            ('ACE_INFINITY_SPOOL', self.cmd_ACE_INFINITY_SPOOL, "Change tool whel current spool is empty"),
             ('ACE_FILAMENT_INFO', self.cmd_ACE_FILAMENT_INFO, "Show filament info"),
         ]
         for name, func, desc in commands:
@@ -685,8 +687,56 @@ class ValgAce:
             return self.reactor.NEVER
         return event_time + 0.5
 
-   
-   
+    def cmd_ACE_INFINITY_SPOOL(self, gcmd):
+        was = self.variables.get('ace_current_index', -1)
+        infsp_count = self.variables.get('ace_infsp_counter', 1)
+        
+        if self.infinity_spool_mode != 'True':
+            gcmd.respond_info(f"ACE_INFINITY_SPOOL disabled")
+            return
+        if was == -1:
+            gcmd.respond_info(f"Tool is not set")
+            return
+        if infsp_count >= 4:
+            gcmd.respond_info(f"No more ready spoll")
+            return
+        
+        self.gcode.run_script_from_command(f"_ACE_PRE_INFINITYSPOOL")
+        self.toolhead.wait_moves()
+        
+        if infsp_count == 1:
+                tool = infsp_count
+                self.gcode.run_script_from_command(f'ACE_PARK_TO_TOOLHEAD INDEX={tool}')
+                self.pdwell(15.0)
+                self.gcode.run_script_from_command(f'__ACE_POST_INFINITYSPOOL')
+                self.toolhead.wait_moves()
+                self.variables['ace_current_index'] = tool
+                self.gcode.run_script_from_command(f'SAVE_VARIABLE VARIABLE=ace_current_index VALUE={tool}')
+                self.variables['ace_infsp_counter'] = 2
+                self.gcode.run_script_from_command(f'SAVE_VARIABLE VARIABLE=ace_infsp_counter VALUE=2')
+                gcmd.respond_info(f"Tool changed from {was} to {tool}")
+        elif infsp_count == 2:
+                tool = infsp_count
+                self.gcode.run_script_from_command(f'ACE_PARK_TO_TOOLHEAD INDEX={tool}')
+                self.pdwell(15.0)
+                self.gcode.run_script_from_command(f'__ACE_POST_INFINITYSPOOL')
+                self.toolhead.wait_moves()
+                self.variables['ace_current_index'] = tool
+                self.gcode.run_script_from_command(f'SAVE_VARIABLE VARIABLE=ace_current_index VALUE={tool}')
+                self.variables['ace_infsp_counter'] = 3
+                self.gcode.run_script_from_command(f'SAVE_VARIABLE VARIABLE=ace_infsp_counter VALUE=3')                                
+                gcmd.respond_info(f"Tool changed from {was} to {tool}")
+        elif infsp_count == 3:
+                tool = infsp_count
+                self.gcode.run_script_from_command(f'ACE_PARK_TO_TOOLHEAD INDEX={tool}')
+                self.pdwell(15.0)
+                self.gcode.run_script_from_command(f'__ACE_POST_INFINITYSPOOL')
+                self.toolhead.wait_moves()
+                self.variables['ace_current_index'] = tool
+                self.gcode.run_script_from_command(f'SAVE_VARIABLE VARIABLE=ace_current_index VALUE={tool}')
+                self.variables['ace_infsp_counter'] = 4
+                self.gcode.run_script_from_command(f'SAVE_VARIABLE VARIABLE=ace_infsp_counter VALUE=4')                  
+                gcmd.respond_info(f"Tool changed from {was} to {tool}")
 
 
 def load_config(config):
