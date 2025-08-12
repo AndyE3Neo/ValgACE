@@ -632,6 +632,7 @@ class ValgAce:
 
         if was == tool:
             gcmd.respond_info(f"Tool already set to {tool}")
+            self.gcode.run_script_from_command(f'ACE_PARK_TO_TOOLHEAD INDEX={tool}')
             return
 
         if tool != -1 and self._info['slots'][tool]['status'] != 'ready':
