@@ -706,7 +706,6 @@ class ValgAce:
                 infsp_count == 1
             elif self._info['slots']['2']['status'] = 'ready':
                 infsp_count == 2
-            return
         
         self.gcode.run_script_from_command(f"_ACE_PRE_INFINITYSPOOL")
         self.toolhead.wait_moves()
