@@ -700,12 +700,12 @@ class ValgAce:
         if infsp_count >= 4:
             if self._info['slots']['0']['status'] != 'ready' and self._info['slots']['1']['status'] != 'ready' and self._info['slots']['2']['status'] != 'ready':
                 gcmd.respond_info(f"No more ready spool")
-            elif self._info['slots']['0']['status'] = 'ready':
-                infsp_count == 0
-            elif self._info['slots']['1']['status'] = 'ready':
-                infsp_count == 1
-            elif self._info['slots']['2']['status'] = 'ready':
-                infsp_count == 2
+            elif self._info['slots']['0']['status'] == 'ready':
+                infsp_count = 0
+            elif self._info['slots']['1']['status'] == 'ready':
+                infsp_count = 1
+            elif self._info['slots']['2']['status'] == 'ready':
+                infsp_count = 2
         
         self.gcode.run_script_from_command(f"_ACE_PRE_INFINITYSPOOL")
         self.toolhead.wait_moves()
