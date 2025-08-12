@@ -691,7 +691,7 @@ class ValgAce:
         was = self.variables.get('ace_current_index', -1)
         infsp_count = self.variables.get('ace_infsp_counter', 1)
         
-        if self.infinity_spool_mode != 'True':
+        if self.infinity_spool_mode != True:
             gcmd.respond_info(f"ACE_INFINITY_SPOOL disabled")
             return
         if was == -1:
