@@ -641,7 +641,7 @@ class ValgAce:
             return
 
         if tool != -1 and self._info['slots'][tool]['status'] != 'ready' and self.infinity_spool_mode == True:
-            self.gcode.run_script_from_command(f"_ACE_INFINITY_SPOOL")
+            self.gcode.run_script_from_command(f"INFINITY_SPOOL")
             return
 
         
