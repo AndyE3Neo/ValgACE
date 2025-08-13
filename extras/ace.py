@@ -631,7 +631,7 @@ class ValgAce:
         was = self.variables.get('ace_current_index', -1)
 
         if was == tool:
-            gcmd.respond_info(f"Tool already set to {tool}")
+            gcmd.respond_info(f"Tool already set to {tool}, just parking to head")
             self.gcode.run_script_from_command(f'ACE_PARK_TO_TOOLHEAD INDEX={tool}')
             #self.gcode.run_script_from_command(f'ACE_ENABLE_FEED_ASSIST INDEX={tool}')
             return
@@ -697,31 +697,33 @@ class ValgAce:
     def cmd_ACE_INFINITY_SPOOL(self, gcmd):
         was = self.variables.get('ace_current_index', -1)
         infsp_count = self.variables.get('ace_infsp_counter', 1)
+        tool = was+1
         
         if self.infinity_spool_mode != True:
-            gcmd.respond_info(f"ACE_INFINITY_SPOOL disabled")
+            gcmd.respond_info(f"ACE_INFINITY_SPOOL disabled in configuration")
             return
         if was == -1:
             gcmd.respond_info(f"Tool is not set")
             return
-        if infsp_count >= 4:
+        if tool >= 4:
             if self._info['slots']['0']['status'] != 'ready' and self._info['slots']['1']['status'] != 'ready' and self._info['slots']['2']['status'] != 'ready':
                 gcmd.respond_info(f"No more ready spool")
                 return
             elif self._info['slots']['0']['status'] == 'ready':
-                infsp_count = 0
+                tool = 0
             elif self._info['slots']['1']['status'] == 'ready':
-                infsp_count = 1
+                tool = 1
             elif self._info['slots']['2']['status'] == 'ready':
-                infsp_count = 2
+                tool = 2
+        
         
         self.gcode.run_script_from_command(f"_ACE_PRE_INFINITYSPOOL")
         self.toolhead.wait_moves()
         
-        tool = infsp_count
+        #tool = infsp_count
         self.gcode.run_script_from_command(f'ACE_PARK_TO_TOOLHEAD INDEX={tool}')
         self.pdwell(15.0)
-        self.gcode.run_script_from_command(f'_ACE_POST_INFINITYSPOOL')
+        self.gcode.run_script_from_command(f'_ACE_POST_INFINITYSPOOL TOOL={tool}')
         self.toolhead.wait_moves()
         self.variables['ace_current_index'] = tool
         self.gcode.run_script_from_command(f'SAVE_VARIABLE VARIABLE=ace_current_index VALUE={tool}')
