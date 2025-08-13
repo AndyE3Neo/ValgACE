@@ -707,6 +707,7 @@ class ValgAce:
         if infsp_count >= 4:
             if self._info['slots']['0']['status'] != 'ready' and self._info['slots']['1']['status'] != 'ready' and self._info['slots']['2']['status'] != 'ready':
                 gcmd.respond_info(f"No more ready spool")
+                return
             elif self._info['slots']['0']['status'] == 'ready':
                 infsp_count = 0
             elif self._info['slots']['1']['status'] == 'ready':
@@ -725,7 +726,7 @@ class ValgAce:
         self.variables['ace_current_index'] = tool
         self.gcode.run_script_from_command(f'SAVE_VARIABLE VARIABLE=ace_current_index VALUE={tool}')
         self.variables['ace_infsp_counter'] = tool+1
-        self.gcode.run_script_from_command(f'SAVE_VARIABLE VARIABLE=ace_infsp_counter VALUE=2')
+        self.gcode.run_script_from_command(f'SAVE_VARIABLE VARIABLE=ace_infsp_counter VALUE={tool+1}')
         gcmd.respond_info(f"Tool changed from {was} to {tool}")
         
 
