@@ -633,13 +633,18 @@ class ValgAce:
         if was == tool:
             gcmd.respond_info(f"Tool already set to {tool}")
             self.gcode.run_script_from_command(f'ACE_PARK_TO_TOOLHEAD INDEX={tool}')
-            self.gcode.run_script_from_command(f'ACE_ENABLE_FEED_ASSIST INDEX={tool}')
+            #self.gcode.run_script_from_command(f'ACE_ENABLE_FEED_ASSIST INDEX={tool}')
             return
 
-        if tool != -1 and self._info['slots'][tool]['status'] != 'ready':
+        if tool != -1 and self._info['slots'][tool]['status'] != 'ready' and self.infinity_spool_mode != True::
             self.gcode.run_script_from_command(f"_ACE_ON_EMPTY_ERROR INDEX={tool}")
             return
 
+        if tool != -1 and self._info['slots'][tool]['status'] != 'ready' and self.infinity_spool_mode == True::
+            self.gcode.run_script_from_command(f"_ACE_INFINITY_SPOOL")
+            return
+
+        
         self.gcode.run_script_from_command(f"_ACE_PRE_TOOLCHANGE FROM={was} TO={tool}")
         self._park_is_toolchange = True
         self._park_previous_tool = was
