@@ -636,11 +636,11 @@ class ValgAce:
             #self.gcode.run_script_from_command(f'ACE_ENABLE_FEED_ASSIST INDEX={tool}')
             return
 
-        if tool != -1 and self._info['slots'][tool]['status'] != 'ready' and self.infinity_spool_mode != True::
+        if tool != -1 and self._info['slots'][tool]['status'] != 'ready' and self.infinity_spool_mode != True:
             self.gcode.run_script_from_command(f"_ACE_ON_EMPTY_ERROR INDEX={tool}")
             return
 
-        if tool != -1 and self._info['slots'][tool]['status'] != 'ready' and self.infinity_spool_mode == True::
+        if tool != -1 and self._info['slots'][tool]['status'] != 'ready' and self.infinity_spool_mode == True:
             self.gcode.run_script_from_command(f"_ACE_INFINITY_SPOOL")
             return
 
