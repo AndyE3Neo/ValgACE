@@ -706,14 +706,14 @@ class ValgAce:
             gcmd.respond_info(f"Tool is not set")
             return
         if tool >= 4:
-            if self._info['slots']['0']['status'] != 'ready' and self._info['slots']['1']['status'] != 'ready' and self._info['slots']['2']['status'] != 'ready':
+            if self._info['slots'][0]['status'] != 'ready' and self._info['slots'][1]['status'] != 'ready' and self._info['slots'][2]['status'] != 'ready':
                 gcmd.respond_info(f"No more ready spool")
                 return
-            elif self._info['slots']['0']['status'] == 'ready':
+            elif self._info['slots'][0]['status'] == 'ready':
                 tool = 0
-            elif self._info['slots']['1']['status'] == 'ready':
+            elif self._info['slots'][1]['status'] == 'ready':
                 tool = 1
-            elif self._info['slots']['2']['status'] == 'ready':
+            elif self._info['slots'][2]['status'] == 'ready':
                 tool = 2
         
         
