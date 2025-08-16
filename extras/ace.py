@@ -698,25 +698,41 @@ class ValgAce:
         was = self.variables.get('ace_current_index', -1)
         infsp_count = self.variables.get('ace_infsp_counter', 1)
         tool = was+1
+
+        if tool >= 4:
+            tool_0 = 0
+            tool_1 = 1
+            tool_2 = 2
+        elif tool == 1:
+            tool_0 = 1
+            tool_1 = 2
+            tool_2 = 3
+        elif tool == 2:
+            tool_0 = 2
+            tool_1 = 3
+            tool_2 = 0
+        elif tool == 3:
+            tool_0 = 3
+            tool_1 = 0
+            tool_2 = 1
         
         if self.infinity_spool_mode != True:
             gcmd.respond_info(f"ACE_INFINITY_SPOOL disabled in configuration")
             return
         if was == -1:
-            gcmd.respond_info(f"Tool is not set")
+            gcmd.respond_info(f"Current spool not set")
             return
-        if tool >= 4:
-            if self._info['slots'][0]['status'] != 'ready' and self._info['slots'][1]['status'] != 'ready' and self._info['slots'][2]['status'] != 'ready':
-                gcmd.respond_info(f"No more ready spool")
-                return
-            elif self._info['slots'][0]['status'] == 'ready':
-                tool = 0
-            elif self._info['slots'][1]['status'] == 'ready':
-                tool = 1
-            elif self._info['slots'][2]['status'] == 'ready':
-                tool = 2
-        
-        
+        tool = -1
+        if self._info['slots'][tool_2]['status'] == 'ready':
+            tool = tool_2
+        if self._info['slots'][tool_1]['status'] == 'ready':
+            tool = tool_1
+        if self._info['slots'][tool_0]['status'] == 'ready':
+            tool = tool_0
+        if tool == -1:
+            gcmd.respond_info(f"No more ready spool")
+            return
+       
         self.gcode.run_script_from_command(f"_ACE_PRE_INFINITYSPOOL")
         self.toolhead.wait_moves()
         
