@@ -686,7 +686,7 @@ class ValgAce:
             self.gcode.run_script_from_command(f'_ACE_POST_TOOLCHANGE FROM={was} TO={tool}')
             self.toolhead.wait_moves()
             self.variables['ace_current_index'] = tool
-            gcmd.respond_info(f"Tool changed from {was} to {tool}")
+            gcmd.respond_info(f"Toolchange: changed from {was} to {tool}")
             
     def _wait_for_slot_ready(self, index, on_ready, event_time):
         if self._info['slots'][index]['status'] == 'ready':
@@ -732,7 +732,8 @@ class ValgAce:
         if tool == -1:
             gcmd.respond_info(f"No more ready spool")
             return
-       
+
+        gcmd.respond_info(f"Tool selected: {tool}")
         self.gcode.run_script_from_command(f"_ACE_PRE_INFINITYSPOOL")
         self.toolhead.wait_moves()
         
@@ -745,7 +746,7 @@ class ValgAce:
         self.gcode.run_script_from_command(f'SAVE_VARIABLE VARIABLE=ace_current_index VALUE={tool}')
         self.variables['ace_infsp_counter'] = tool+1
         self.gcode.run_script_from_command(f'SAVE_VARIABLE VARIABLE=ace_infsp_counter VALUE={tool+1}')
-        gcmd.respond_info(f"Tool changed from {was} to {tool}")
+        gcmd.respond_info(f"IS: tool changed from {was} to {tool}")
         
 
 
