@@ -629,11 +629,12 @@ class ValgAce:
     def cmd_ACE_CHANGE_TOOL(self, gcmd):
         tool = gcmd.get_int('TOOL', minval=-1, maxval=3)
         was = self.variables.get('ace_current_index', -1)
+        gcmd.respond_info(f"Toolchange: current slot is {was}, desired slot is {tool}")
 
         if was == tool:
             gcmd.respond_info(f"Tool already set to {tool}, just parking to head")
             self.gcode.run_script_from_command(f'ACE_PARK_TO_TOOLHEAD INDEX={tool}')
-            self.gcode.run_script_from_command(f'ACE_ENABLE_FEED_ASSIST INDEX={tool}')
+            self.gcode.run_script_from_command(f'ACE_ENABLE_FEED_ASSIST INDEX={tool}') #should add checking of AF var
             return
 
         if tool != -1 and self._info['slots'][tool]['status'] != 'ready' and self.infinity_spool_mode != True:
@@ -698,6 +699,7 @@ class ValgAce:
         was = self.variables.get('ace_current_index', -1)
         infsp_count = self.variables.get('ace_infsp_counter', 1)
         tool = was+1
+        gcmd.respond_info(f"Infinity Spool: current slot is {was}")
 
         if tool >= 4:
             tool_0 = 0
@@ -715,6 +717,9 @@ class ValgAce:
             tool_0 = 3
             tool_1 = 0
             tool_2 = 1
+        ready_0 = self._info['slots'][tool_0]['status']
+        ready_1 = self._info['slots'][tool_1]['status']
+        ready_2 = self._info['slots'][tool_2]['status']
         
         if self.infinity_spool_mode != True:
             gcmd.respond_info(f"ACE_INFINITY_SPOOL disabled in configuration")
@@ -722,12 +727,15 @@ class ValgAce:
         if was == -1:
             gcmd.respond_info(f"Current spool not set")
             return
+        gcmd.respond_info(f"Toolchange queue: {tool_0}, {tool_1}, {tool_2}")
+        gcmd.respond_info(f"States of them: {ready_0}, {ready_1}, {ready_2}")
+        
         tool = -1
-        if self._info['slots'][tool_2]['status'] == 'ready':
+        if ready_2 == 'ready':
             tool = tool_2
-        if self._info['slots'][tool_1]['status'] == 'ready':
+        if ready_1 == 'ready':
             tool = tool_1
-        if self._info['slots'][tool_0]['status'] == 'ready':
+        if ready_0 == 'ready':
             tool = tool_0
         if tool == -1:
             gcmd.respond_info(f"No more ready spool")
