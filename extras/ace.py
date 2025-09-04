@@ -12,6 +12,14 @@ from typing import Optional, Dict, Any, Callable
 from serial import SerialException
 from contextlib import contextmanager
 
+@dataclass(frozen=True)
+class C:
+    SLOTS           = 4
+    READY           = 'ready'
+    EMPTY           = 'empty'
+    PARK_DWELL      = 15.0
+    RETRACT_DWELL   = 1.0
+    TIMEOUT_UNWIND  = 30
 
 class ValgAce:
     def __init__(self, config):
