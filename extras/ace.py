@@ -7,6 +7,7 @@ import json
 import struct
 import queue
 import traceback
+import inspect
 from typing import Optional, Dict, Any, Callable
 from serial import SerialException
 from contextlib import contextmanager
@@ -106,26 +107,16 @@ class ValgAce:
         self.printer.register_event_handler('klippy:disconnect', self._handle_disconnect)
 
     def _register_gcode_commands(self):
-        commands = [
-            ('ACE_DEBUG', self.cmd_ACE_DEBUG, "Debug connection"),
-            ('ACE_STATUS', self.cmd_ACE_STATUS, "Get device status"),
-            ('ACE_START_DRYING', self.cmd_ACE_START_DRYING, "Start drying"),
-            ('ACE_STOP_DRYING', self.cmd_ACE_STOP_DRYING, "Stop drying"),
-            ('ACE_ENABLE_FEED_ASSIST', self.cmd_ACE_ENABLE_FEED_ASSIST, "Enable feed assist"),
-            ('ACE_DISABLE_FEED_ASSIST', self.cmd_ACE_DISABLE_FEED_ASSIST, "Disable feed assist"),
-            ('ACE_PARK_TO_TOOLHEAD', self.cmd_ACE_PARK_TO_TOOLHEAD, "Park filament to toolhead"),
-            ('ACE_FEED', self.cmd_ACE_FEED, "Feed filament"),
-            ('ACE_UPDATE_FEEDING_SPEED', self.cmd_ACE_UPDATE_FEEDING_SPEED, "Update feeding speed"),
-            ('ACE_STOP_FEED', self.cmd_ACE_STOP_FEED, "Stop feed filament"),
-            ('ACE_RETRACT', self.cmd_ACE_RETRACT, "Retract filament"),
-            ('ACE_UPDATE_RETRACT_SPEED', self.cmd_ACE_UPDATE_RETRACT_SPEED, "Update retracting speed"),
-            ('ACE_STOP_RETRACT', self.cmd_ACE_STOP_RETRACT, "Stop retract filament"),
-            ('ACE_CHANGE_TOOL', self.cmd_ACE_CHANGE_TOOL, "Change tool"),
-            ('ACE_INFINITY_SPOOL', self.cmd_ACE_INFINITY_SPOOL, "Change tool whel current spool is empty"),
-            ('ACE_FILAMENT_INFO', self.cmd_ACE_FILAMENT_INFO, "Show filament info"),
-        ]
-        for name, func, desc in commands:
-            self.gcode.register_command(name, func, desc=desc)
+        for name, method in inspect.getmembers(self, inspect.ismethod):
+            if not name.startswith('cmd_ACE_'):
+                continue
+
+            cmd_name   = name[4:]                        #  "cmd_ACE_LOAD" -> "ACE_LOAD"
+            doc        = (method.__doc__ or '').strip()
+            # first non-empty line becomes the description
+            desc       = doc.splitlines()[0] if doc else cmd_name
+
+            self.gcode.register_command(cmd_name, method, desc=desc)
 
     def _find_ace_device(self) -> Optional[str]:
         ACE_IDS = {
@@ -425,6 +416,7 @@ class ValgAce:
         self._connect()
 
     def cmd_ACE_STATUS(self, gcmd):
+        """Get device status"""
         try:
             status = json.dumps(self._info, indent=2)
             gcmd.respond_info(f"ACE Status:\n{status}")
@@ -433,6 +425,7 @@ class ValgAce:
             gcmd.respond_raw("Error retrieving status")
 
     def cmd_ACE_DEBUG(self, gcmd):
+        """Debug connection"""
         method = gcmd.get('METHOD')
         params = gcmd.get('PARAMS', '{}')
         try:
@@ -468,6 +461,7 @@ class ValgAce:
         self.send_request(request, callback)
 
     def cmd_ACE_FILAMENT_INFO(self, gcmd):
+        """Show filament info"""
         index = gcmd.get_int('INDEX', minval=0, maxval=3)
         try:
             def callback(response):
@@ -482,6 +476,7 @@ class ValgAce:
             self.gcode.respond_info('Error: ' + str(e))
 
     def cmd_ACE_START_DRYING(self, gcmd):
+        """Start drying"""
         temperature = gcmd.get_int('TEMP', minval=20, maxval=self.max_dryer_temperature)
         duration = gcmd.get_int('DURATION', 240, minval=1)
         def callback(response):
@@ -499,6 +494,7 @@ class ValgAce:
         }, callback)
 
     def cmd_ACE_STOP_DRYING(self, gcmd):
+        """Stop drying"""
         def callback(response):
             if response.get('code', 0) != 0:
                 gcmd.respond_raw(f"ACE Error: {response.get('msg', 'Unknown error')}")
@@ -507,6 +503,7 @@ class ValgAce:
         self.send_request({"method": "drying_stop"}, callback)
 
     def cmd_ACE_ENABLE_FEED_ASSIST(self, gcmd):
+        """Enable feed assist"""
         index = gcmd.get_int('INDEX', minval=0, maxval=3)
         def callback(response):
             if response.get('code', 0) != 0:
@@ -518,6 +515,7 @@ class ValgAce:
         self.send_request({"method": "start_feed_assist", "params": {"index": index}}, callback)
 
     def cmd_ACE_DISABLE_FEED_ASSIST(self, gcmd):
+        """Disable feed assist"""
         index = gcmd.get_int('INDEX', self._feed_assist_index, minval=0, maxval=3)
         def callback(response):
             if response.get('code', 0) != 0:
@@ -540,6 +538,7 @@ class ValgAce:
         self.send_request({"method": "start_feed_assist", "params": {"index": index}}, callback)
 
     def cmd_ACE_PARK_TO_TOOLHEAD(self, gcmd):
+        """Park filament to toolhead"""
         if self._park_in_progress:
             gcmd.respond_raw("Already parking to toolhead")
             return
@@ -550,6 +549,7 @@ class ValgAce:
         self._park_to_toolhead(index)
 
     def cmd_ACE_FEED(self, gcmd):
+        """Feed filament"""
         index = gcmd.get_int('INDEX', minval=0, maxval=3)
         length = gcmd.get_int('LENGTH', minval=1)
         speed = gcmd.get_int('SPEED', self.feed_speed, minval=1)
@@ -563,6 +563,7 @@ class ValgAce:
         self.dwell((length / speed) + 0.1, lambda: None)
 
     def cmd_ACE_UPDATE_FEEDING_SPEED(self, gcmd):
+        """Update feeding speed"""
         index = gcmd.get_int('INDEX', minval=0, maxval=3)
         speed = gcmd.get_int('SPEED', self.feed_speed, minval=1)
         def callback(response):
@@ -575,6 +576,7 @@ class ValgAce:
         self.dwell(0.5, lambda: None)
 
     def cmd_ACE_STOP_FEED(self, gcmd):
+        """Stop feed filament"""
         index = gcmd.get_int('INDEX', minval=0, maxval=3)
         def callback(response):
             if response.get('code', 0) != 0:
@@ -588,6 +590,7 @@ class ValgAce:
         self.dwell(0.5, lambda: None)
 
     def cmd_ACE_RETRACT(self, gcmd):
+        """Retract filament"""
         index = gcmd.get_int('INDEX', minval=0, maxval=3)
         length = gcmd.get_int('LENGTH', minval=1)
         speed = gcmd.get_int('SPEED', self.retract_speed, minval=1)
@@ -602,6 +605,7 @@ class ValgAce:
         self.pdwell((length / speed) + 0.1)
 
     def cmd_ACE_UPDATE_RETRACT_SPEED(self, gcmd):
+        """Update speed of retracting"""
         index = gcmd.get_int('INDEX', minval=0, maxval=3)
         speed = gcmd.get_int('SPEED', self.feed_speed, minval=1)
         def callback(response):
@@ -614,6 +618,7 @@ class ValgAce:
         self.dwell(0.5, lambda: None)
 
     def cmd_ACE_STOP_RETRACT(self, gcmd):
+        """Stop retracting filament"""
         index = gcmd.get_int('INDEX', minval=0, maxval=3)
         def callback(response):
             if response.get('code', 0) != 0:
@@ -627,6 +632,7 @@ class ValgAce:
         self.dwell(0.5, lambda: None)
 
     def cmd_ACE_CHANGE_TOOL(self, gcmd):
+        """Change tool"""
         tool = gcmd.get_int('TOOL', minval=-1, maxval=3)
         was = self.variables.get('ace_current_index', -1)
         gcmd.respond_info(f"Toolchange: current slot is {was}, desired slot is {tool}")
