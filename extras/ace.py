@@ -18,7 +18,7 @@ class C:
     READY           = 'ready'
     EMPTY           = 'empty'
     PARK_DWELL      = 15.0
-    RETRACT_DWELL   = 1.0
+    DEFAULT_DWELL   = 1.0
     TIMEOUT_UNWIND  = 30
 
 class ValgAce:
@@ -177,7 +177,7 @@ class ValgAce:
                     return True
             except SerialException as e:
                 print(f"Connection attempt {attempt + 1} failed: {str(e)}")
-                self.dwell(1.0, lambda: None)
+                self.dwell(C.DEFAULT_DWELL, lambda: None)
         print("Failed to connect to ACE device")
         return False
 
@@ -310,7 +310,7 @@ class ValgAce:
         if not self._connected:
             return eventtime + 0.05
         now = eventtime
-        if now - self._last_status_request > (0.2 if self._park_in_progress else 1.0):
+        if now - self._last_status_request > (0.2 if self._park_in_progress else C.DEFAULT_DWELL):
             self._request_status()
             self._last_status_request = now
         if not self._queue.empty():
@@ -327,7 +327,7 @@ class ValgAce:
         def status_callback(response):
             if 'result' in response:
                 self._info.update(response['result'])
-        if self.reactor.monotonic() - self._last_status_request > (0.2 if self._park_in_progress else 1.0):
+        if self.reactor.monotonic() - self._last_status_request > (0.2 if self._park_in_progress else C.DEFAULT_DWELL):
             try:
                 self.send_request({
                     "id": self._get_next_request_id(),
@@ -385,7 +385,7 @@ class ValgAce:
             if self.disable_assist_after_toolchange:
                 self._feed_assist_index = -1
 
-    def dwell(self, delay: float = 1.0, callback: Optional[Callable] = None):
+    def dwell(self, delay: float = C.DEFAULT_DWELL, callback: Optional[Callable] = None):
         """Асинхронная пауза через reactor"""
         if delay <= 0:
             if callback:
@@ -415,12 +415,12 @@ class ValgAce:
 
     def _reconnect(self):
         self._disconnect()
-        self.dwell(1.0, lambda: None)
+        self.dwell(C.DEFAULT_DWELL, lambda: None)
         self._connect()
 
     def _reset_connection(self):
         self._disconnect()
-        self.dwell(1.0, lambda: None)
+        self.dwell(C.DEFAULT_DWELL, lambda: None)
         self._connect()
 
     def cmd_ACE_STATUS(self, gcmd):
@@ -680,14 +680,14 @@ class ValgAce:
                 }
             }, callback)
             self.pdwell((self.toolchange_retract_length / self.retract_speed) + 0.1)
-            self.pdwell(1.0)
+            self.pdwell(C.DEFAULT_DWELL)
             if tool != -1:
                 while self._info['slots'][was]['status'] != 'ready':
-                    self.pdwell(1.0)
+                    self.pdwell(C.DEFAULT_DWELL)
                 self.gcode.run_script_from_command(f'ACE_PARK_TO_TOOLHEAD INDEX={tool}')
-                self.pdwell(15.0)
+                self.pdwell(C.PARK_DWELL)
                 # while self._info['slots'][tool]['status'] != 'ready':
-                #     self.pdwell(1.0)
+                #     self.pdwell(C.DEFAULT_DWELL)
                 self.gcode.run_script_from_command(f'_ACE_POST_TOOLCHANGE FROM={was} TO={tool}')
                 self.toolhead.wait_moves()
                 gcmd.respond_info(f"Tool changed from {was} to {tool}")
@@ -697,7 +697,7 @@ class ValgAce:
                 gcmd.respond_info(f"Tool changed from {was} to {tool}")
         else:
             self._park_to_toolhead(tool)
-            self.pdwell(15.0)
+            self.pdwell(C.PARK_DWELL)
             self.gcode.run_script_from_command(f'_ACE_POST_TOOLCHANGE FROM={was} TO={tool}')
             self.toolhead.wait_moves()
             self.variables['ace_current_index'] = tool
@@ -744,7 +744,7 @@ def cmd_ACE_INFINITY_SPOOL(self, gcmd):
     self.gcode.run_script_from_command("_ACE_PRE_INFINITYSPOOL")
     self.toolhead.wait_moves()
     self.gcode.run_script_from_command(f'ACE_PARK_TO_TOOLHEAD INDEX={tool}')
-    self.pdwell(15.0)
+    self.pdwell(C.PARK_DWELL)
     self.gcode.run_script_from_command(f'_ACE_POST_INFINITYSPOOL TOOL={tool}')
     self.toolhead.wait_moves()
 
