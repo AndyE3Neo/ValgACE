@@ -695,66 +695,55 @@ class ValgAce:
             return self.reactor.NEVER
         return event_time + 0.5
 
-    def cmd_ACE_INFINITY_SPOOL(self, gcmd):
-        was = self.variables.get('ace_current_index', -1)
-        infsp_count = self.variables.get('ace_infsp_counter', 1)
-        tool = was+1
-        gcmd.respond_info(f"Infinity Spool: current slot is {was}")
+def cmd_ACE_INFINITY_SPOOL(self, gcmd):
+    """
+    Pick the next filament spool in round-robin order,
+    skipping any whose status is not 'ready'.
+    """
+    if not self.infinity_spool_mode:               # cheaper than == True
+        gcmd.respond_info("ACE_INFINITY_SPOOL disabled in configuration")
+        return
 
-        if tool >= 4:
-            tool_0 = 0
-            tool_1 = 1
-            tool_2 = 2
-        elif tool == 1:
-            tool_0 = 1
-            tool_1 = 2
-            tool_2 = 3
-        elif tool == 2:
-            tool_0 = 2
-            tool_1 = 3
-            tool_2 = 0
-        elif tool == 3:
-            tool_0 = 3
-            tool_1 = 0
-            tool_2 = 1
-        ready_0 = self._info['slots'][tool_0]['status']
-        ready_1 = self._info['slots'][tool_1]['status']
-        ready_2 = self._info['slots'][tool_2]['status']
-        
-        if self.infinity_spool_mode != True:
-            gcmd.respond_info(f"ACE_INFINITY_SPOOL disabled in configuration")
-            return
-        if was == -1:
-            gcmd.respond_info(f"Current spool not set")
-            return
-        gcmd.respond_info(f"Toolchange queue: {tool_0}, {tool_1}, {tool_2}")
-        gcmd.respond_info(f"States of them: {ready_0}, {ready_1}, {ready_2}")
-        
-        tool = -1
-        if ready_2 == 'ready':
-            tool = tool_2
-        if ready_1 == 'ready':
-            tool = tool_1
-        if ready_0 == 'ready':
-            tool = tool_0
-        if tool == -1:
-            gcmd.respond_info(f"No more ready spool")
-            return
+    was = self.variables.get('ace_current_index', -1)
+    if was == -1:
+        gcmd.respond_info("Current spool not set")
+        return
 
-        gcmd.respond_info(f"Tool selected: {tool}")
-        self.gcode.run_script_from_command(f"_ACE_PRE_INFINITYSPOOL")
-        self.toolhead.wait_moves()
-        
-        #tool = infsp_count
-        self.gcode.run_script_from_command(f'ACE_PARK_TO_TOOLHEAD INDEX={tool}')
-        self.pdwell(15.0)
-        self.gcode.run_script_from_command(f'_ACE_POST_INFINITYSPOOL TOOL={tool}')
-        self.toolhead.wait_moves()
-        self.variables['ace_current_index'] = tool
-        self.gcode.run_script_from_command(f'SAVE_VARIABLE VARIABLE=ace_current_index VALUE={tool}')
-        self.variables['ace_infsp_counter'] = tool+1
-        self.gcode.run_script_from_command(f'SAVE_VARIABLE VARIABLE=ace_infsp_counter VALUE={tool+1}')
-        gcmd.respond_info(f"IS: tool changed from {was} to {tool}")
+    # --- build candidate list starting with next slot -----------------
+    candidates = [(was + 1 + i) & 3 for i in range(4)]   # 0..3 wrap-around
+    gcmd.respond_info(f"Infinity Spool: current slot is {was}")
+    gcmd.respond_info(f"Tool-change queue: {candidates}")
+
+    # --- pick first ready slot ---------------------------------------
+    tool = None
+    for t in candidates:
+        if self._info['slots'][t]['status'] == 'ready':
+            tool = t
+            break
+
+    if tool is None:
+        gcmd.respond_info("No more ready spool")
+        return
+
+    # --- execute the swap --------------------------------------------
+    gcmd.respond_info(f"Tool selected: {tool}")
+    self.gcode.run_script_from_command("_ACE_PRE_INFINITYSPOOL")
+    self.toolhead.wait_moves()
+    self.gcode.run_script_from_command(f'ACE_PARK_TO_TOOLHEAD INDEX={tool}')
+    self.pdwell(15.0)
+    self.gcode.run_script_from_command(f'_ACE_POST_INFINITYSPOOL TOOL={tool}')
+    self.toolhead.wait_moves()
+
+    # --- persist state -----------------------------------------------
+    self.variables['ace_current_index'] = tool
+    self.gcode.run_script_from_command(f'SAVE_VARIABLE VARIABLE=ace_current_index VALUE={tool}')
+
+    # keep counter in 0-3 range (optional but tidy)
+    next_counter = (tool + 1) & 3
+    self.variables['ace_infsp_counter'] = next_counter
+    self.gcode.run_script_from_command(f'SAVE_VARIABLE VARIABLE=ace_infsp_counter VALUE={next_counter}')
+
+    gcmd.respond_info(f"IS: tool changed from {was} to {tool}")
         
 
 
