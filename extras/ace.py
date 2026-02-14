@@ -106,6 +106,7 @@ class ValgAce:
         self._park_is_toolchange = False
         self._park_previous_tool = -1
         self._park_index = -1
+        self._park_start_time = 0  # Initialize to prevent AttributeError
 
         # Очереди
         # Queues
@@ -913,32 +914,6 @@ class ValgAce:
                 self.dwell(0.3, lambda: None)
         self.send_request({"method": "stop_feed_assist", "params": {"index": index}}, callback)
  
-    def _park_to_toolhead(self, index: int):
-        # Set parking flag BEFORE sending request to ensure timers see it
-        self._park_in_progress = True
-        self._park_error = False  # Reset error flag
-        self._park_index = index
-        self._assist_hit_count = 0
-        self._park_start_time = self.reactor.monotonic()
-        self._park_count_increased = False  # Track if count actually increased
-        
-        self.logger.info(f"Starting parking for slot {index}")
-        
-        def callback(response):
-            if response.get('code', 0) != 0:
-                if 'result' in response and 'msg' in response['result']:
-                    self.logger.error(f"ACE Error starting feed assist: {response['result']['msg']}")
-                else:
-                    self.logger.error(f"ACE Error starting feed assist: {response.get('msg', 'Unknown error')}")
-                # Reset parking flag on error since device won't start feeding
-                self._park_in_progress = False
-                self.logger.error(f"Parking aborted for slot {index} due to start_feed_assist error")
-            else:
-                self._last_assist_count = response.get('result', {}).get('feed_assist_count', 0)
-                self.logger.info(f"Feed assist started for slot {index}, count: {self._last_assist_count}")
-            self.dwell(0.3, lambda: None)
-        self.send_request({"method": "start_feed_assist", "params": {"index": index}}, callback)
- 
     def cmd_ACE_PARK_TO_TOOLHEAD(self, gcmd):
         if self._park_in_progress:
             gcmd.respond_raw("Already parking to toolhead")
@@ -1319,10 +1294,6 @@ class ValgAce:
                 gcmd.respond_info("ACE device is already connected")
             else:
                 self._manually_disconnected = False  # Reset the manually disconnected flag
-                # Cancel any existing connection timer
-                if hasattr(self, '_connect_timer') and self._connect_timer:
-                    self.reactor.unregister_timer(self._connect_timer)
-                    self._connect_timer = None
                 
                 # Attempt immediate connection
                 success = self._connect()
