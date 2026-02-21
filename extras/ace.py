@@ -82,7 +82,14 @@ class ValgAce:
         self.aggressive_parking = config.getboolean('aggressive_parking', False)
         self.max_parking_distance = config.getint('max_parking_distance', 100)
         self.parking_speed = config.getint('parking_speed', 10)
-        
+        # Дополнительное время к таймауту парковки (в секундах)
+        self.extended_park_time = config.getint('extended_park_time', 10)
+        # Максимальное время ожидания парковки (в секундах)
+        self.max_parking_timeout = config.getint('max_parking_timeout', 60)
+
+        # Макрос для паузы печати (по умолчанию PAUSE)
+        self.pause_macro_name = config.get('set_pause_macro_name', 'PAUSE')
+
         # Добавляем возможность привязки к сенсору филамента
         # Optional filament sensor integration
 
@@ -107,6 +114,9 @@ class ValgAce:
         self._park_previous_tool = -1
         self._park_index = -1
         self._park_start_time = 0  # Initialize to prevent AttributeError
+        # Флаги для агрессивной парковки с сенсором
+        self._sensor_parking_active = False  # True когда используется сенсорная парковка
+        self._sensor_parking_completed = False  # True когда сенсор успешно сработал
 
         # Очереди
         # Queues
@@ -133,6 +143,13 @@ class ValgAce:
         self._park_count_increased = False
         # Флаг для предотвращения рекурсивного вызова _ACE_POST_TOOLCHANGE
         self._post_toolchange_running = False
+        # Ссылки на активные таймеры для корректной очистки (предотвращение утечек)
+        self._park_monitor_timer = None
+        self._sensor_monitor_timer = None
+        # Флаги и счётчики для обработки обрыва связи
+        self._connection_lost = False
+        self._reconnect_attempts = 0
+        self._max_reconnect_attempts = 10
 
     def _get_default_info(self) -> Dict[str, Any]:
         return {
@@ -187,6 +204,8 @@ class ValgAce:
             ('ACE_DISCONNECT', self.cmd_ACE_DISCONNECT, "Force disconnect device"),
             ('ACE_CONNECT', self.cmd_ACE_CONNECT, "Connect to device"),
             ('ACE_CONNECTION_STATUS', self.cmd_ACE_CONNECTION_STATUS, "Check connection status"),
+            ('ACE_RECONNECT', self.cmd_ACE_RECONNECT, "Manually reset connection and clear error flags"),
+            ('ACE_GET_HELP', self.cmd_ACE_GET_HELP, "Show all available ACE commands with descriptions"),
         ]
         for name, func, desc in commands:
             self.gcode.register_command(name, func, desc=desc)
@@ -224,6 +243,9 @@ class ValgAce:
                 if self._serial.is_open:
                     self._connected = True
                     self._info['status'] = 'ready'
+                    # Сбрасываем счётчик попыток при успешном подключении
+                    self._reconnect_attempts = 0
+                    self._connection_lost = False
                     self.logger.info(f"Connected to ACE at {self.serial_name}")
 
                     def info_callback(response):
@@ -238,7 +260,7 @@ class ValgAce:
                         self._reader_timer = self.reactor.register_timer(self._reader_loop, self.reactor.NOW)
                     if self._writer_timer is None:
                         self._writer_timer = self.reactor.register_timer(self._writer_loop, self.reactor.NOW)
-                        
+
                     self.logger.info("Connection established successfully")
                     return True
                 else:
@@ -330,6 +352,16 @@ class ValgAce:
     def _handle_disconnect(self):
         # When klipper disconnects, reset the manually disconnected flag so auto-reconnect can work after restart
         self._manually_disconnected = False
+
+        # Проверяем состояние печати и вызываем паузу если нужно
+        printer_state = self._get_printer_state()
+        if printer_state == 'printing':
+            self.logger.info(f"Klipper disconnect detected during printing, triggering {self.pause_macro_name}")
+            try:
+                self.gcode.run_script_from_command(self.pause_macro_name)
+            except Exception as e:
+                self.logger.error(f"Error triggering {self.pause_macro_name} during klipper disconnect: {str(e)}")
+
         self._disconnect()
 
     def get_status(self, eventtime):
@@ -544,9 +576,17 @@ class ValgAce:
                 current_status = result.get('status', 'unknown')
                 current_assist_count = result.get('feed_assist_count', 0)
                 elapsed_time = self.reactor.monotonic() - self._park_start_time
-                
-                self.logger.debug(f"Parking check: slot {self._park_index}, count={current_assist_count}, " +
+
+                # Определяем режим парковки
+                parking_mode = "sensor" if self._sensor_parking_active else ("traditional" if self._sensor_parking_completed else "normal")
+                self.logger.debug(f"Parking check ({parking_mode}): slot {self._park_index}, count={current_assist_count}, " +
                                 f"last={self._last_assist_count}, hits={self._assist_hit_count}, elapsed={elapsed_time:.1f}s")
+                
+                # Skip count monitoring during sensor-based parking - it has its own timer
+                # Sensor-based parking is managed by _monitor_filament_sensor_for_parking()
+                if self._sensor_parking_active:
+                    self.logger.debug(f"Skipping count check during sensor-based parking for slot {self._park_index}")
+                    return
                 
                 if current_status == 'ready':
                     if current_assist_count != self._last_assist_count:
@@ -558,14 +598,18 @@ class ValgAce:
                             self.logger.info(f"Feed assist working for slot {self._park_index}, count: {current_assist_count}")
                     else:
                         self._assist_hit_count += 1
-                        
+
                         # Check if feed assist is actually working
-                        if elapsed_time > 3.0 and not self._park_count_increased:
+                        # BUT: Skip this check for sensor-based parking - count won't change until sensor triggers
+                        if not self._sensor_parking_active and elapsed_time > 3.0 and not self._park_count_increased:
                             # 3 seconds passed and count never increased - feed assist not working
                             self.logger.error(f"Feed assist for slot {self._park_index} not working - count stayed at {current_assist_count}")
                             self._park_error = True  # Mark as error BEFORE resetting flag
                             self._park_in_progress = False
                             self._park_index = -1
+                            # Сбрасываем флаги сенсорной парковки
+                            self._sensor_parking_active = False
+                            self._sensor_parking_completed = False
                             return
                         
                         if self._assist_hit_count >= self.park_hit_count:
@@ -577,6 +621,9 @@ class ValgAce:
                                 # Mark as error and abort
                                 self._park_error = True
                                 self._park_in_progress = False
+                                # Сбрасываем флаги сенсорной парковки
+                                self._sensor_parking_active = False
+                                self._sensor_parking_completed = False
                             return
                         # Проверяем, что таймер не будет создаваться бесконечно
                         # если self.dwell уже запланирован, не вызываем его снова
@@ -588,25 +635,39 @@ class ValgAce:
         if not self._park_in_progress:
             return
         self.logger.info(f"Parking completed for slot {self._park_index}")
-        try:
-            self.send_request({
-                "method": "stop_feed_assist",
-                "params": {"index": self._park_index}
-            }, lambda r: None)
-            # if self._park_is_toolchange:
-            #     self.gcode.run_script_from_command(
-            #         f'_ACE_POST_TOOLCHANGE FROM={self._park_previous_tool} TO={self._park_index}'
-            #     )
-        except Exception as e:
-            self.logger.info(f"Parking completion error: {str(e)}")
-        finally:
-            self._park_in_progress = False
-            self._park_error = False  # Reset error flag
-            self._park_is_toolchange = False
-            self._park_previous_tool = -1
-            self._park_index = -1
-            if self.disable_assist_after_toolchange:
-                self._feed_assist_index = -1
+        
+        # Останавливаем feed assist для указанного слота
+        def stop_feed_assist_callback(response):
+            if response.get('code', 0) != 0:
+                self.logger.warning(f"Warning stopping feed assist after parking: {response.get('msg', 'Unknown error')}")
+            else:
+                self.logger.info(f"Feed assist stopped successfully after parking for slot {self._park_index}")
+        
+        self.send_request({
+            "method": "stop_feed_assist",
+            "params": {"index": self._park_index}
+        }, stop_feed_assist_callback)
+        
+        # Если это была смена инструмента, выполняем макрос пост-обработки
+        if self._park_is_toolchange:
+            self.logger.info(f"Executing post-toolchange macro: FROM={self._park_previous_tool} TO={self._park_index}")
+            self.gcode.run_script_from_command(
+                f'_ACE_POST_TOOLCHANGE FROM={self._park_previous_tool} TO={self._park_index}'
+            )
+        
+        self._park_in_progress = False
+        self._park_error = False  # Reset error flag
+        self._park_is_toolchange = False
+        self._park_previous_tool = -1
+        self._park_index = -1
+        # Сбрасываем флаги сенсорной парковки
+        self._sensor_parking_active = False
+        self._sensor_parking_completed = False
+        # Очищаем ссылки на таймеры для предотвращения утечек
+        self._park_monitor_timer = None
+        self._sensor_monitor_timer = None
+        if self.disable_assist_after_toolchange:
+            self._feed_assist_index = -1
 
     def dwell(self, delay: float = 1.0, callback: Optional[Callable] = None):
         """Асинхронная пауза через reactor"""
@@ -630,7 +691,47 @@ class ValgAce:
         self.reactor.register_timer(timer_handler, self.reactor.monotonic() + delay)
 
 
+    def _get_printer_state(self):
+        """Получить текущее состояние печати"""
+        eventtime = self.reactor.monotonic()
+        try:
+            print_stats = self.printer.lookup_object('print_stats')
+            ps_status = print_stats.get_status(eventtime)
+            return ps_status.get('state', 'unknown')
+        except Exception:
+            return 'unknown'
+
+    def _pause_print_if_needed(self):
+        """Вызвать паузу если принтер печатает"""
+        printer_state = self._get_printer_state()
+        if printer_state == 'printing':
+            self.logger.info(f"Print in progress, triggering {self.pause_macro_name}")
+            try:
+                self.gcode.run_script_from_command(self.pause_macro_name)
+            except Exception as e:
+                self.logger.error(f"Error triggering {self.pause_macro_name}: {str(e)}")
+
+    def _notify_connection_lost(self):
+        """Уведомить пользователя о потере связи и вызвать паузу при печати"""
+        self.gcode.respond_raw("ACE: CRITICAL - Connection lost after maximum attempts")
+        self._pause_print_if_needed()
+
     def _reconnect(self):
+        # Проверяем, не достигнут ли лимит попыток
+        if self._connection_lost:
+            return  # Уже превышен лимит, не пытаемся подключиться
+        
+        self._reconnect_attempts += 1
+        
+        if self._reconnect_attempts > self._max_reconnect_attempts:
+            # Превышен лимит попыток
+            self._connection_lost = True
+            self._notify_connection_lost()
+            return
+        
+        # Уведомляем о попытке переподключения
+        self.logger.info(f"Attempting to reconnect to ACE (attempt {self._reconnect_attempts}/{self._max_reconnect_attempts})")
+        
         # During automatic reconnect, reset the manually disconnected flag
         self._manually_disconnected = False
         self._disconnect()
@@ -638,6 +739,20 @@ class ValgAce:
         self._connect()
 
     def _reset_connection(self):
+        # Во время сброса соединения также проверяем лимит попыток
+        if self._connection_lost:
+            return  # Уже превышен лимит
+        
+        self._reconnect_attempts += 1
+        
+        if self._reconnect_attempts > self._max_reconnect_attempts:
+            # Превышен лимит попыток
+            self._connection_lost = True
+            self._notify_connection_lost()
+            return
+        
+        self.logger.info(f"Resetting ACE connection (attempt {self._reconnect_attempts}/{self._max_reconnect_attempts})")
+        
         # During connection reset, reset the manually disconnected flag
         self._manually_disconnected = False
         self._disconnect()
@@ -659,7 +774,7 @@ class ValgAce:
                         dryer_data = result.get('dryer') or result.get('dryer_status', {})
                         self.logger.info(f"RAW dryer data in callback: {json.dumps(dryer_data, indent=2)}")
                     
-                    # Нормализация данных о сушилке
+                    # ��ормализация данных о сушилке
                     if 'dryer_status' in result and isinstance(result['dryer_status'], dict):
                         result['dryer'] = result['dryer_status']
                     self._info.update(result)
@@ -1011,17 +1126,20 @@ class ValgAce:
         if not self.filament_sensor:
             self.logger.error("Filament sensor not configured for sensor-based parking")
             return False
-            
+
         self.logger.info(f"Starting sensor-based parking for slot {index}")
-        
+
         # Set parking flags
         self._park_in_progress = True
         self._park_error = False
         self._park_index = index
         self._park_start_time = self.reactor.monotonic()
-        
-        # Calculate timeout: (max_parking_distance / parking_speed) + 10 seconds
-        timeout_duration = (self.max_parking_distance / self.parking_speed) + 10
+        # Устанавливаем флаги сенсорной парковки
+        self._sensor_parking_active = True
+        self._sensor_parking_completed = False
+
+        # Calculate timeout: (max_parking_distance / parking_speed) + extended_park_time seconds
+        timeout_duration = (self.max_parking_distance / self.parking_speed) + self.extended_park_time
         self.logger.info(f"Sensor-based parking timeout: {timeout_duration:.1f}s")
         
         # Start feeding filament at parking_speed
@@ -1030,10 +1148,13 @@ class ValgAce:
                 self.logger.error(f"Error starting feed for sensor-based parking: {response.get('msg', 'Unknown error')}")
                 self._park_in_progress = False
                 self._park_error = True
+                # Очищаем ссылки на таймеры
+                self._park_monitor_timer = None
+                self._sensor_monitor_timer = None
                 return
-                
+
             self.logger.info(f"Started feeding filament for slot {index} at speed {self.parking_speed}")
-            
+
             # Start monitoring the filament sensor
             self._monitor_filament_sensor_for_parking(index, timeout_duration)
         
@@ -1050,12 +1171,17 @@ class ValgAce:
         Monitor the filament sensor during parking and switch to traditional algorithm when triggered.
         """
         start_time = self.reactor.monotonic()
-        
+
+        def cleanup_sensor_timer():
+            """Очистка ссылки на таймер сенсора"""
+            self._sensor_monitor_timer = None
+
         def check_sensor(eventtime):
             if not self._park_in_progress:
                 # Parking was cancelled or completed elsewhere
+                cleanup_sensor_timer()
                 return self.reactor.NEVER
-                
+            
             # Check if timeout has been reached
             elapsed = eventtime - start_time
             if elapsed > timeout_duration:
@@ -1065,8 +1191,21 @@ class ValgAce:
                     "method": "stop_feed_filament",
                     "params": {"index": index}
                 }, lambda r: None)
+                
+                # ALSO stop feed assist to prevent conflicts
+                self.send_request({
+                    "method": "stop_feed_assist",
+                    "params": {"index": index}
+                }, lambda r: None)
+                
                 self._park_in_progress = False
                 self._park_error = True
+                # Сбрасываем флаги сенсорной парковки
+                self._sensor_parking_active = False
+                self._sensor_parking_completed = False
+                # Проверяем состояние печати и вызываем паузу если нужно
+                self._pause_print_if_needed()
+                cleanup_sensor_timer()
                 return self.reactor.NEVER
             
             # Check filament sensor status
@@ -1076,14 +1215,46 @@ class ValgAce:
                 
                 if filament_detected:
                     self.logger.info(f"Filament detected by sensor for slot {index}, switching to traditional parking")
-                    # Stop feeding filament
+                    # Stop feeding filament and potentially any active feed assist
                     self.send_request({
                         "method": "stop_feed_filament",
                         "params": {"index": index}
                     }, lambda r: None)
                     
-                    # Switch to traditional parking algorithm
-                    self._switch_to_traditional_parking(index)
+                    # Переключаем флаги: сенсорная парковка завершена, запускаем традиционную
+                    self._sensor_parking_active = False
+                    self._sensor_parking_completed = True
+                    
+                    # Цикл ожидания статуса устройства (ready) перед переключением на традиционную парковку
+                    # Интервал опроса: 0.2 секунды, тайм-аут: 5 секунд
+                    status_wait_start = self.reactor.monotonic()
+                    status_wait_timeout = 5.0
+                    status_poll_interval = 0.2
+                    
+                    def wait_for_device_ready(eventtime):
+                        elapsed = eventtime - status_wait_start
+                        
+                        # Проверка тайм-аута
+                        if elapsed > status_wait_timeout:
+                            self.logger.warning(f"Timeout waiting for device ready status after stop_feed_filament for slot {index}, continuing anyway")
+                            self.gcode.respond_info(f"ACE: Timeout waiting for device ready, continuing with traditional parking")
+                            self._switch_to_traditional_parking(index)
+                            cleanup_sensor_timer()
+                            return self.reactor.NEVER
+                        
+                        # Проверяем статус устройства
+                        current_status = self._info.get('status', 'unknown')
+                        if current_status == 'ready':
+                            self.logger.info(f"Device ready after {elapsed:.1f}s, switching to traditional parking for slot {index}")
+                            self._switch_to_traditional_parking(index)
+                            cleanup_sensor_timer()
+                            return self.reactor.NEVER
+                        
+                        # Продолжаем опрос
+                        return eventtime + status_poll_interval
+                    
+                    # Запускаем таймер опроса статуса
+                    self.reactor.register_timer(wait_for_device_ready, self.reactor.NOW)
                     return self.reactor.NEVER
                 else:
                     # Continue monitoring
@@ -1095,56 +1266,93 @@ class ValgAce:
                     "method": "stop_feed_filament",
                     "params": {"index": index}
                 }, lambda r: None)
+                
+                # ALSO stop feed assist to prevent conflicts
+                self.send_request({
+                    "method": "stop_feed_assist",
+                    "params": {"index": index}
+                }, lambda r: None)
+                
                 self._park_in_progress = False
                 self._park_error = True
+                # Сбрасываем флаги сенсорной парковки
+                self._sensor_parking_active = False
+                self._sensor_parking_completed = False
+                # Проверяем состояние печати и вызываем паузу если нужно
+                self._pause_print_if_needed()
+                cleanup_sensor_timer()
                 return self.reactor.NEVER
-        
-        # Register the timer to monitor the sensor
-        self.reactor.register_timer(check_sensor, self.reactor.NOW)
+
+        # Register the timer to monitor the sensor and save reference
+        self._sensor_monitor_timer = self.reactor.register_timer(check_sensor, self.reactor.NOW)
 
     def _switch_to_traditional_parking(self, index: int):
         """
         Switch from sensor-based parking to traditional parking algorithm.
-        Actually, once sensor detects filament, parking is considered complete.
-        We just need to activate feed assist and complete the parking process.
+        After sensor detects filament, we start feed assist and monitor parking completion
+        using the traditional algorithm (feed_assist_count tracking).
         """
-        self.logger.info(f"Completing parking after sensor detection for slot {index}")
-        
-        # Since the sensor has detected the filament, we consider parking complete
-        # Just activate feed assist and complete the process
-        def enable_assist_callback(response):
+        self.logger.info(f"Switching to traditional parking for slot {index} after sensor detection")
+
+        # CRITICAL: Reset timers and counters for the new parking phase
+        # This is necessary because elapsed_time and hit_count were accumulated
+        # during sensor-based parking phase and would cause false errors
+        self._park_start_time = self.reactor.monotonic()
+        self._assist_hit_count = 0
+        self._park_count_increased = False
+        self._last_assist_count = 0
+        self.logger.info(f"Reset parking timers for traditional phase: start_time reset, hit_count=0")
+
+        # First, make sure feed assist is stopped before starting traditional parking
+        # This prevents conflicts between the two parking phases
+        def ensure_feed_assist_stopped(response):
             if response.get('code', 0) != 0:
-                self.logger.error(f"Error enabling feed assist after sensor detection: {response.get('msg', 'Unknown error')}")
-                self._park_error = True
+                self.logger.warning(f"Warning stopping feed assist before traditional parking: {response.get('msg', 'Unknown error')}")
             else:
-                self._feed_assist_index = index
-                self.logger.info(f"Feed assist enabled for slot {index} after sensor-based parking")
+                self.logger.info(f"Feed assist stopped successfully before traditional parking for slot {index}")
             
-            # Complete the parking process immediately
-            self._complete_parking()
-        
-        # Activate feed assist for the slot
+            # Now start feed assist for traditional parking
+            def start_feed_callback(response):
+                if response.get('code', 0) != 0:
+                    self.logger.error(f"Error starting feed assist for traditional parking: {response.get('msg', 'Unknown error')}")
+                    self._park_error = True
+                    self._park_in_progress = False
+                    return
+
+                # Получаем начальный счетчик feed_assist_count
+                self._last_assist_count = response.get('result', {}).get('feed_assist_count', 0)
+                self.logger.info(f"Traditional parking started for slot {index}, initial count: {self._last_assist_count}")
+                # Дальше мониторинг будет происходить в _reader_loop через _handle_response
+
+            # Activate feed assist for the slot
+            self.send_request({
+                "method": "start_feed_assist",
+                "params": {"index": index}
+            }, start_feed_callback)
+
+        # Stop any ongoing feed assist before switching to traditional parking
+        # This ensures clean transition between parking phases
         self.send_request({
-            "method": "start_feed_assist",
+            "method": "stop_feed_assist",
             "params": {"index": index}
-        }, enable_assist_callback)
+        }, ensure_feed_assist_stopped)
 
     def _park_to_toolhead(self, index: int):
+        # Устанавливаем флаги парковки ДО вызова любого метода для предотвращения гонки данных
+        self._park_in_progress = True
+        self._park_error = False
+        self._park_index = index
+        self._assist_hit_count = 0
+        self._park_start_time = self.reactor.monotonic()
+        self._park_count_increased = False
+
         # Check if aggressive parking should be used
         if self.aggressive_parking:
             self.logger.info(f"Using aggressive parking method for slot {index}")
             self._sensor_based_parking(index)
         else:
-            # Set parking flag BEFORE sending request to ensure timers see it
-            self._park_in_progress = True
-            self._park_error = False  # Reset error flag
-            self._park_index = index
-            self._assist_hit_count = 0
-            self._park_start_time = self.reactor.monotonic()
-            self._park_count_increased = False  # Track if count actually increased
-            
             self.logger.info(f"Starting traditional parking for slot {index}")
-            
+
             def callback(response):
                 if response.get('code', 0) != 0:
                     if 'result' in response and 'msg' in response['result']:
@@ -1153,6 +1361,8 @@ class ValgAce:
                         self.logger.error(f"ACE Error starting feed assist: {response.get('msg', 'Unknown error')}")
                     # Reset parking flag on error since device won't start feeding
                     self._park_in_progress = False
+                    self._park_monitor_timer = None
+                    self._sensor_monitor_timer = None
                     self.logger.error(f"Parking aborted for slot {index} due to start_feed_assist error")
                 else:
                     self._last_assist_count = response.get('result', {}).get('feed_assist_count', 0)
@@ -1216,24 +1426,29 @@ class ValgAce:
             if tool != -1:
                 # Park new tool to toolhead
                 self._park_to_toolhead(tool)
-                
+
                 # Wait for parking to complete (check self._park_in_progress)
                 self.logger.info(f"Waiting for parking to complete (slot {tool})")
-                timeout = self.reactor.monotonic() + 60.0  # 60 second timeout for parking
+                timeout = self.reactor.monotonic() + self.max_parking_timeout  # max_parking_timeout seconds timeout for parking
                 while self._park_in_progress:
+                    if self._connection_lost:
+                        gcmd.respond_raw(f"ACE Error: Connection lost during parking for slot {tool}")
+                        self._pause_print_if_needed()
+                        return
                     if self._park_error:
                         gcmd.respond_raw(f"ACE Error: Parking failed for slot {tool}")
                         return
                     if self.reactor.monotonic() > timeout:
-                        gcmd.respond_raw(f"ACE Error: Timeout waiting for parking to complete")
+                        gcmd.respond_raw(f"ACE Error: Timeout waiting for parking to complete ({self.max_parking_timeout}s)")
+                        self._pause_print_if_needed()
                         return
                     if self.toolhead:
                         self.toolhead.dwell(1.0)
-                
+
                 self.logger.info(f"Parking completed, executing post-toolchange")
                 if self.toolhead:
                     self.toolhead.wait_moves()
-                
+
                 # Execute post-toolchange macro
                 self.gcode.run_script_from_command(f'_ACE_POST_TOOLCHANGE FROM={was} TO={tool}')
                 if self.toolhead:
@@ -1249,16 +1464,21 @@ class ValgAce:
             # No previous tool, just park the new one
             self.logger.info(f"Starting parking for slot {tool} (no previous tool)")
             self._park_to_toolhead(tool)
-            
+
             # Wait for parking to complete (check self._park_in_progress)
             self.logger.info(f"Waiting for parking to complete (slot {tool})")
-            timeout = self.reactor.monotonic() + 60.0  # 60 second timeout for parking
+            timeout = self.reactor.monotonic() + self.max_parking_timeout  # max_parking_timeout seconds timeout for parking
             while self._park_in_progress:
+                if self._connection_lost:
+                    gcmd.respond_raw(f"ACE Error: Connection lost during parking for slot {tool}")
+                    self._pause_print_if_needed()
+                    return
                 if self._park_error:
                     gcmd.respond_raw(f"ACE Error: Parking failed for slot {tool}")
                     return
                 if self.reactor.monotonic() > timeout:
-                    gcmd.respond_raw(f"ACE Error: Timeout waiting for parking to complete")
+                    gcmd.respond_raw(f"ACE Error: Timeout waiting for parking to complete ({self.max_parking_timeout}s)")
+                    self._pause_print_if_needed()
                     return
                 if self.toolhead:
                     self.toolhead.dwell(1.0)
@@ -1313,7 +1533,7 @@ class ValgAce:
         try:
             status = "connected" if self._connected else "disconnected"
             gcmd.respond_info(f"ACE Connection Status: {status}")
-            
+
             if self._connected:
                 # Provide additional connection details
                 try:
@@ -1322,13 +1542,39 @@ class ValgAce:
                     gcmd.respond_info(f"Device: {model}, Firmware: {firmware}")
                 except Exception:
                     gcmd.respond_info("Device: connected (details unavailable)")
-                    
             else:
                 gcmd.respond_info(f"Serial Port: {self.serial_name}")
                 gcmd.respond_info(f"Baud Rate: {self.baud}")
+            
+            # Дополнительная информация о состоянии обрыва связи
+            if self._connection_lost:
+                gcmd.respond_raw(f"ACE: Connection lost flag is set (attempts: {self._reconnect_attempts}/{self._max_reconnect_attempts})")
+                gcmd.respond_info("Try ACE_RECONNECT to reset the connection")
         except Exception as e:
             self.logger.error(f"Error checking connection status: {str(e)}")
             gcmd.respond_raw(f"Error checking status: {str(e)}")
+
+    def cmd_ACE_RECONNECT(self, gcmd):
+        """G-code command to manually reset connection and clear error flags"""
+        try:
+            self.logger.info("Manual reconnection requested via ACE_RECONNECT")
+            # Сбрасываем флаги ошибки
+            self._connection_lost = False
+            self._reconnect_attempts = 0
+            
+            # Пробуем подключиться
+            self._manually_disconnected = False
+            self._disconnect()
+            self.dwell(1.0, lambda: None)
+            
+            success = self._connect()
+            if success:
+                gcmd.respond_info("ACE: Reconnection successful")
+            else:
+                gcmd.respond_raw("ACE: Reconnection failed, will retry automatically")
+        except Exception as e:
+            self.logger.error(f"Error during manual reconnect: {str(e)}")
+            gcmd.respond_raw(f"Error reconnecting: {str(e)}")
 
     def cmd_ACE_SET_INFINITY_SPOOL_ORDER(self, gcmd):
         """Set the order of slots for infinity spool mode"""
@@ -1483,22 +1729,26 @@ class ValgAce:
             if parking_success['completed']:
                 return  # Already processed
             parking_success['completed'] = True
-            
+            # Очищаем ссылку на таймер мониторинга
+            self._park_monitor_timer = None
+
             self.logger.info(f"INFINITY_SPOOL: parking complete for slot {tool}, executing post-processing")
             self.gcode.run_script_from_command(f'_ACE_POST_INFINITYSPOOL')
             if self.toolhead:
                 self.toolhead.wait_moves()
-            
+
             # Save variables only on success
             self._save_variable('ace_current_index', tool)
             self._save_variable('ace_infsp_position', new_position)
             gcmd.respond_info(f"Tool changed from {was} to {tool}")
-        
+
         def on_park_error():
             if parking_success['completed']:
                 return  # Already processed
             parking_success['completed'] = True
-            
+            # Очищаем ссылку на таймер мониторинга
+            self._park_monitor_timer = None
+
             self.logger.error(f"INFINITY_SPOOL: parking failed for slot {tool}")
             gcmd.respond_raw(f"ACE Error: Failed to park slot {tool}")
             # Don't save variables on error
@@ -1524,33 +1774,97 @@ class ValgAce:
         # Monitor parking with timeout
         max_wait_time = 30.0
         start_time = self.reactor.monotonic()
-        
+
+        def cleanup_park_timer():
+            """Очистка ссылки на таймер мониторинга парковки"""
+            self._park_monitor_timer = None
+
         def check_parking_status(eventtime):
             elapsed = eventtime - start_time
-            
+
+            # Check for connection lost
+            if self._connection_lost:
+                self.logger.error(f"INFINITY_SPOOL: Connection lost during parking for slot {tool}")
+                self._park_in_progress = False
+                self._park_error = True
+                on_park_error()
+                cleanup_park_timer()
+                return self.reactor.NEVER
+
             # Check for error
             if self._park_error:
                 on_park_error()
+                cleanup_park_timer()
                 return self.reactor.NEVER
-            
+
             # Check for completion
             if not self._park_in_progress:
                 on_park_complete()
+                cleanup_park_timer()
                 return self.reactor.NEVER
-            
+
             # Check for timeout
             if elapsed > max_wait_time:
                 self.logger.error(f"INFINITY_SPOOL: parking timeout after {elapsed:.1f}s")
                 self._park_in_progress = False
                 self._park_error = True
                 on_park_error()
+                cleanup_park_timer()
                 return self.reactor.NEVER
-            
+
             # Continue monitoring
             return eventtime + 0.5
-        
-        # Register monitoring timer
-        self.reactor.register_timer(check_parking_status, self.reactor.monotonic() + 0.5)
+
+        # Register monitoring timer and save reference
+        self._park_monitor_timer = self.reactor.register_timer(check_parking_status, self.reactor.monotonic() + 0.5)
+
+    def cmd_ACE_GET_HELP(self, gcmd):
+        """Show all available ACE commands with descriptions"""
+        help_text = """
+====== ValgACE Commands Help ======
+
+Information Commands:
+  ACE_STATUS                - Get full ACE device status
+  ACE_FILAMENT_INFO         - Get filament info from slot (requires RFID)
+  ACE_CHECK_FILAMENT_SENSOR - Check external filament sensor status
+
+Tool Management:
+  ACE_CHANGE_TOOL           - Change tool (auto load/unload filament)
+  ACE_PARK_TO_TOOLHEAD      - Park filament to toolhead nozzle
+
+Filament Control:
+  ACE_FEED                  - Feed filament from specified slot
+  ACE_RETRACT               - Retract filament back to slot
+  ACE_STOP_FEED             - Stop filament feeding
+  ACE_STOP_RETRACT          - Stop filament retraction
+  ACE_UPDATE_FEEDING_SPEED  - Update feeding speed on the fly
+  ACE_UPDATE_RETRACT_SPEED  - Update retract speed on the fly
+
+Feed Assist:
+  ACE_ENABLE_FEED_ASSIST    - Enable feed assist for slot
+  ACE_DISABLE_FEED_ASSIST   - Disable feed assist for slot
+
+Drying Control:
+  ACE_START_DRYING          - Start filament drying process
+  ACE_STOP_DRYING           - Stop filament drying process
+
+Connection:
+  ACE_DISCONNECT            - Force disconnect from ACE device
+  ACE_CONNECT               - Connect to ACE device
+  ACE_CONNECTION_STATUS     - Check connection status
+  ACE_RECONNECT             - Reset connection and clear error flags
+
+Infinity Spool Mode:
+  ACE_SET_INFINITY_SPOOL_ORDER - Set slot change order for infinity spool
+  ACE_INFINITY_SPOOL        - Auto spool change on filament end
+
+Debug:
+  ACE_DEBUG                 - Debug command for direct device interaction
+
+===================================
+
+"""
+        gcmd.respond_info(help_text)
 
 def load_config(config):
     return ValgAce(config)
