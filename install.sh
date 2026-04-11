@@ -55,158 +55,127 @@ SRCDIR="$PWD"
 KLIPPER_HOME="${HOME}/klipper"
 KLIPPER_ENV="${HOME}/klippy-env/bin"
 
-# Arrays for storing detected instances
-declare -a INSTANCE_NUMS
-declare -a INSTANCE_NAMES
-declare -a PRINTER_DATA_HOMES
-declare -a KLIPPER_CONFIG_HOMES
-declare -a MOONRAKER_CONFIG_DIRS
-declare -a MOONRAKER_HOMES
-declare -a KLIPPER_SERVICES
-declare -a MOONRAKER_SERVICES
+# Global counters for instances
+TOTAL_INSTANCES=0
 
-# Get paths for a specific instance
-get_instance_paths() {
- local num=$1
-
- # Instance 0 = default (printer_data), Instance 1+ = printer_1_data, etc.
- if [ "$num" -eq 0 ]; then
-  echo "INSTANCE_NUM=0"
-  echo "INSTANCE_NAME=default"
-  echo "PRINTER_DATA_HOME=${HOME}/printer_data"
-  echo "KLIPPER_CONFIG_HOME=${HOME}/printer_data/config"
-  echo "MOONRAKER_CONFIG_DIR=${HOME}/printer_data/config"
-  # Try to find moonraker home - check multiple locations
-  if [ -d "${HOME}/moonraker" ]; then
-   echo "MOONRAKER_HOME=${HOME}/moonraker"
-  elif [ -d "${HOME}/moonraker-0" ]; then
-   echo "MOONRAKER_HOME=${HOME}/moonraker-0"
-  elif [ -d "${HOME}/moonraker_0" ]; then
-   echo "MOONRAKER_HOME=${HOME}/moonraker_0"
-  else
-   echo "MOONRAKER_HOME=${HOME}/moonraker"
-  fi
- else
-  echo "INSTANCE_NUM=${num}"
-  echo "INSTANCE_NAME=printer_${num}"
-  echo "PRINTER_DATA_HOME=${HOME}/printer_${num}_data"
-  echo "KLIPPER_CONFIG_HOME=${HOME}/printer_${num}_data/config"
-  echo "MOONRAKER_CONFIG_DIR=${HOME}/printer_${num}_data/config"
-  # Check for separate moonraker home for this instance
-  if [ -d "${HOME}/moonraker-${num}" ]; then
-   echo "MOONRAKER_HOME=${HOME}/moonraker-${num}"
-  elif [ -d "${HOME}/moonraker_${num}" ]; then
-   echo "MOONRAKER_HOME=${HOME}/moonraker_${num}"
-  elif [ -d "${HOME}/moonraker" ]; then
-   echo "MOONRAKER_HOME=${HOME}/moonraker"
-  else
-   echo "MOONRAKER_HOME=${HOME}/moonraker"
-  fi
- fi
- echo "KLIPPER_HOME=${KLIPPER_HOME}"
- echo "KLIPPER_ENV=${KLIPPER_ENV}"
+# Set instance variable - using proper POSIX variable naming
+set_instance_var() {
+ local idx="$1"
+ local var="$2"
+ local val="$3"
+ local fullvar="${var}_${idx}"
+ eval "$fullvar="$val""
 }
 
-# Detect available instances and populate arrays
+# Get instance variable
+get_instance_var() {
+ local idx="$1"
+ local var="$2"
+ local fullvar="${var}_${idx}"
+ eval "echo "\$$fullvar""
+}
+
+# Detect available instances and store in variables
 detect_instances() {
  local count=0
 
  # Check default instance (printer_data)
  if [ -d "${HOME}/printer_data/config" ] && [ -f "${HOME}/printer_data/config/moonraker.conf" ]; then
-  INSTANCE_NUMS[$count]=0
-  INSTANCE_NAMES[$count]="default"
-  PRINTER_DATA_HOMES[$count]="${HOME}/printer_data"
-  KLIPPER_CONFIG_HOMES[$count]="${HOME}/printer_data/config"
-  MOONRAKER_CONFIG_DIRS[$count]="${HOME}/printer_data/config"
+  set_instance_var "$count" "INSTANCE_NUM" "0"
+  set_instance_var "$count" "INSTANCE_NAME" "default"
+  set_instance_var "$count" "PRINTER_DATA_HOME" "${HOME}/printer_data"
+  set_instance_var "$count" "KLIPPER_CONFIG_HOME" "${HOME}/printer_data/config"
+  set_instance_var "$count" "MOONRAKER_CONFIG_DIR" "${HOME}/printer_data/config"
 
   # Detect moonraker home
   if [ -d "${HOME}/moonraker" ]; then
-   MOONRAKER_HOMES[$count]="${HOME}/moonraker"
+   set_instance_var "$count" "MOONRAKER_HOME" "${HOME}/moonraker"
   elif [ -d "${HOME}/moonraker-0" ]; then
-   MOONRAKER_HOMES[$count]="${HOME}/moonraker-0"
+   set_instance_var "$count" "MOONRAKER_HOME" "${HOME}/moonraker-0"
   elif [ -d "${HOME}/moonraker_0" ]; then
-   MOONRAKER_HOMES[$count]="${HOME}/moonraker_0"
+   set_instance_var "$count" "MOONRAKER_HOME" "${HOME}/moonraker_0"
   else
-   MOONRAKER_HOMES[$count]="${HOME}/moonraker"
+   set_instance_var "$count" "MOONRAKER_HOME" "${HOME}/moonraker"
   fi
 
   # Detect services
-  KLIPPER_SERVICES[$count]="klipper"
+  set_instance_var "$count" "KLIPPER_SERVICE" "klipper"
   if systemctl list-unit-files 2>/dev/null | grep -q "^moonraker-0.service"; then
-   MOONRAKER_SERVICES[$count]="moonraker-0"
+   set_instance_var "$count" "MOONRAKER_SERVICE" "moonraker-0"
   elif systemctl list-unit-files 2>/dev/null | grep -q "^moonraker_0.service"; then
-   MOONRAKER_SERVICES[$count]="moonraker_0"
+   set_instance_var "$count" "MOONRAKER_SERVICE" "moonraker_0"
   else
-   MOONRAKER_SERVICES[$count]="moonraker"
+   set_instance_var "$count" "MOONRAKER_SERVICE" "moonraker"
   fi
 
   count=$((count + 1))
  fi
 
  # Check numbered instances (printer_1_data, printer_2_data, etc.)
- for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+ local i=1
+ while [ "$i" -le 20 ]; do
   local data_dir="${HOME}/printer_${i}_data"
   local config_dir="${data_dir}/config"
   local moonraker_conf="${config_dir}/moonraker.conf"
 
   if [ -d "$config_dir" ] && [ -f "$moonraker_conf" ]; then
-   INSTANCE_NUMS[$count]=$i
-   INSTANCE_NAMES[$count]="printer_${i}"
-   PRINTER_DATA_HOMES[$count]="$data_dir"
-   KLIPPER_CONFIG_HOMES[$count]="$config_dir"
-   MOONRAKER_CONFIG_DIRS[$count]="$config_dir"
+   set_instance_var "$count" "INSTANCE_NUM" "$i"
+   set_instance_var "$count" "INSTANCE_NAME" "printer_${i}"
+   set_instance_var "$count" "PRINTER_DATA_HOME" "$data_dir"
+   set_instance_var "$count" "KLIPPER_CONFIG_HOME" "$config_dir"
+   set_instance_var "$count" "MOONRAKER_CONFIG_DIR" "$config_dir"
 
    # Detect moonraker home - check for separate first
    if [ -d "${HOME}/moonraker-${i}" ]; then
-    MOONRAKER_HOMES[$count]="${HOME}/moonraker-${i}"
+    set_instance_var "$count" "MOONRAKER_HOME" "${HOME}/moonraker-${i}"
    elif [ -d "${HOME}/moonraker_${i}" ]; then
-    MOONRAKER_HOMES[$count]="${HOME}/moonraker_${i}"
+    set_instance_var "$count" "MOONRAKER_HOME" "${HOME}/moonraker_${i}"
    elif [ -d "${HOME}/moonraker" ]; then
-    MOONRAKER_HOMES[$count]="${HOME}/moonraker"
+    set_instance_var "$count" "MOONRAKER_HOME" "${HOME}/moonraker"
    else
-    MOONRAKER_HOMES[$count]="${HOME}/moonraker"
+    set_instance_var "$count" "MOONRAKER_HOME" "${HOME}/moonraker"
    fi
 
    # Detect klipper service
+   local k_service="klipper-${i}"
    if systemctl list-unit-files 2>/dev/null | grep -q "^klipper-${i}.service"; then
-    KLIPPER_SERVICES[$count]="klipper-${i}"
+    k_service="klipper-${i}"
    elif systemctl list-unit-files 2>/dev/null | grep -q "^klipper_${i}.service"; then
-    KLIPPER_SERVICES[$count]="klipper_${i}"
+    k_service="klipper_${i}"
    elif systemctl list-units --full -all 2>/dev/null | grep -q "klipper@${i}"; then
-    KLIPPER_SERVICES[$count]="klipper@${i}"
-   else
-    KLIPPER_SERVICES[$count]="klipper-${i}"
+    k_service="klipper@${i}"
    fi
+   set_instance_var "$count" "KLIPPER_SERVICE" "$k_service"
 
    # Detect moonraker service
+   local m_service="moonraker-${i}"
    if systemctl list-unit-files 2>/dev/null | grep -q "^moonraker-${i}.service"; then
-    MOONRAKER_SERVICES[$count]="moonraker-${i}"
+    m_service="moonraker-${i}"
    elif systemctl list-unit-files 2>/dev/null | grep -q "^moonraker_${i}.service"; then
-    MOONRAKER_SERVICES[$count]="moonraker_${i}"
+    m_service="moonraker_${i}"
    elif systemctl list-units --full -all 2>/dev/null | grep -q "moonraker@${i}"; then
-    MOONRAKER_SERVICES[$count]="moonraker@${i}"
-   else
-    MOONRAKER_SERVICES[$count]="moonraker-${i}"
+    m_service="moonraker@${i}"
    fi
+   set_instance_var "$count" "MOONRAKER_SERVICE" "$m_service"
 
    count=$((count + 1))
   fi
+
+  i=$((i + 1))
  done
 
- return $count
+ TOTAL_INSTANCES=$count
 }
 
 # Display detected instances in a nice format
 show_instances_table() {
- local total=$1
-
  echo ""
- echo "╔══════════════════════════════════════════════════════════════════════════════╗"
- echo "║                    DETECTED KLIPPER/MOONRAKER INSTANCES                      ║"
- echo "╚══════════════════════════════════════════════════════════════════════════════╝"
+ echo "=============================================="
+ echo "    DETECTED KLIPPER/MOONRAKER INSTANCES"
+ echo "=============================================="
  echo ""
 
- if [ $total -eq 0 ]; then
+ if [ "$TOTAL_INSTANCES" -eq 0 ]; then
   echo "  [ERROR] No instances found!"
   echo ""
   echo "  Searched for:"
@@ -218,31 +187,37 @@ show_instances_table() {
  fi
 
  printf "  %-4s %-12s %-25s %-20s\n" "Num" "Name" "Config Dir" "Moonraker Home"
- echo "  ─────────────────────────────────────────────────────────────────────────"
+ echo "  ---------------------------------------------------------------"
 
  local idx=0
- while [ $idx -lt $total ]; do
-  local num_display="${INSTANCE_NUMS[$idx]}"
-  [ "$num_display" -eq 0 ] && num_display="0 (default)"
-  printf "  [%d]  %-12s %-25s %-20s\n" "$((idx+1))" "${INSTANCE_NAMES[$idx]}" "${MOONRAKER_CONFIG_DIRS[$idx]}" "${MOONRAKER_HOMES[$idx]}"
+ while [ "$idx" -lt "$TOTAL_INSTANCES" ]; do
+  local num_display=$(get_instance_var "$idx" "INSTANCE_NUM")
+  local name=$(get_instance_var "$idx" "INSTANCE_NAME")
+  local config=$(get_instance_var "$idx" "MOONRAKER_CONFIG_DIR")
+  local m_home=$(get_instance_var "$idx" "MOONRAKER_HOME")
+  if [ "$num_display" = "0" ]; then
+   num_display="0 (default)"
+  fi
+  printf "  [%d]  %-12s %-25s %-20s\n" "$((idx+1))" "$name" "$config" "$m_home"
   idx=$((idx + 1))
  done
 
  echo ""
- echo "  Total instances found: $total"
+ echo "  Total instances found: $TOTAL_INSTANCES"
  echo ""
  return 0
 }
 
+# Store selected indices in a space-separated string
+SELECTED_INDICES=""
+
 # Interactive instance selection
 select_instances_interactive() {
- local total=$1
-
  if [ "$ALL_INSTANCES" -eq 1 ]; then
   echo "  [AUTO] Selecting ALL instances"
   SELECTED_INDICES=""
   local idx=0
-  while [ $idx -lt $total ]; do
+  while [ "$idx" -lt "$TOTAL_INSTANCES" ]; do
    if [ -z "$SELECTED_INDICES" ]; then
     SELECTED_INDICES="$idx"
    else
@@ -253,13 +228,13 @@ select_instances_interactive() {
   return
  fi
 
- echo "═══════════════════════════════════════════════════════════════════════════════"
+ echo "=============================================="
  echo ""
  echo "  Select instances to $([ "$UNINSTALL" -eq 1 ] && echo "UNINSTALL from" || echo "INSTALL to"):"
  echo ""
- echo "    • Enter numbers separated by spaces (e.g., 1 2 3)"
- echo "    • Enter 'all' for all instances"
- echo "    • Press ENTER for instance 1 only"
+ echo "    - Enter numbers separated by spaces (e.g., 1 2 3)"
+ echo "    - Enter 'all' for all instances"
+ echo "    - Press ENTER for instance 1 only"
  echo ""
  printf "  Your choice: "
  read -r choice
@@ -272,7 +247,7 @@ select_instances_interactive() {
  elif [ "$choice" = "all" ] || [ "$choice" = "ALL" ]; then
   SELECTED_INDICES=""
   local idx=0
-  while [ $idx -lt $total ]; do
+  while [ "$idx" -lt "$TOTAL_INSTANCES" ]; do
    if [ -z "$SELECTED_INDICES" ]; then
     SELECTED_INDICES="$idx"
    else
@@ -287,7 +262,7 @@ select_instances_interactive() {
   for num in $choice; do
    if echo "$num" | grep -qE '^[0-9]+$'; then
     local idx=$((num-1))
-    if [ $idx -ge 0 ] && [ $idx -lt $total ]; then
+    if [ "$idx" -ge 0 ] && [ "$idx" -lt "$TOTAL_INSTANCES" ]; then
      if [ -z "$SELECTED_INDICES" ]; then
       SELECTED_INDICES="$idx"
      else
@@ -311,21 +286,22 @@ select_instances_interactive() {
  echo ""
  echo "  Selected:"
  for idx in $SELECTED_INDICES; do
-  echo "    • ${INSTANCE_NAMES[$idx]} (Config: ${MOONRAKER_CONFIG_DIRS[$idx]})"
+  local name=$(get_instance_var "$idx" "INSTANCE_NAME")
+  local config=$(get_instance_var "$idx" "MOONRAKER_CONFIG_DIR")
+  echo "    - $name (Config: $config)"
  done
  echo ""
 }
 
 # Parse instance specification (for non-interactive mode)
 parse_instances() {
- local spec=$1
- local total=$2
+ local spec="$1"
 
  if [ "$spec" = "auto" ]; then
   # Auto-detect - use all instances
   SELECTED_INDICES=""
   local idx=0
-  while [ $idx -lt $total ]; do
+  while [ "$idx" -lt "$TOTAL_INSTANCES" ]; do
    if [ -z "$SELECTED_INDICES" ]; then
     SELECTED_INDICES="$idx"
    else
@@ -339,11 +315,12 @@ parse_instances() {
   local items=$(echo "$spec" | tr ',' ' ')
   for item in $items; do
    if echo "$item" | grep -qE '^[0-9]+$'; then
-    # Convert instance number to array index
-    local found=0
+    # Find instance with this number
     local idx=0
-    while [ $idx -lt $total ]; do
-     if [ "${INSTANCE_NUMS[$idx]}" -eq "$item" ]; then
+    local found=0
+    while [ "$idx" -lt "$TOTAL_INSTANCES" ]; do
+     local inst_num=$(get_instance_var "$idx" "INSTANCE_NUM")
+     if [ "$inst_num" -eq "$item" ]; then
       found=1
       if [ -z "$SELECTED_INDICES" ]; then
        SELECTED_INDICES="$idx"
@@ -364,13 +341,13 @@ parse_instances() {
 
 # Verify shared installation
 verify_shared_install() {
- local missing=0
+ echo ""
+ echo "=============================================="
+ echo "         VERIFYING SHARED INSTALLATION"
+ echo "=============================================="
+ echo ""
 
- echo ""
- echo "╔══════════════════════════════════════════════════════════════════════════════╗"
- echo "║                      VERIFYING SHARED INSTALLATION                           ║"
- echo "╚══════════════════════════════════════════════════════════════════════════════╝"
- echo ""
+ local missing=0
 
  if [ ! -d "$KLIPPER_HOME/klippy/extras/" ]; then
   echo "  [ERROR] Klipper installation not found: $KLIPPER_HOME"
@@ -395,38 +372,42 @@ verify_shared_install() {
 
 # Verify specific instance
 verify_instance() {
- local idx=$1
- local num="${INSTANCE_NUMS[$idx]}"
+ local idx="$1"
+ local num=$(get_instance_var "$idx" "INSTANCE_NUM")
+ local name=$(get_instance_var "$idx" "INSTANCE_NAME")
+ local config_home=$(get_instance_var "$idx" "KLIPPER_CONFIG_HOME")
+ local m_config=$(get_instance_var "$idx" "MOONRAKER_CONFIG_DIR")
+ local m_home=$(get_instance_var "$idx" "MOONRAKER_HOME")
 
  echo ""
- echo "  [${INSTANCE_NAMES[$idx]}] Verifying..."
+ echo "  [$name] Verifying..."
 
- if [ ! -d "${KLIPPER_CONFIG_HOMES[$idx]}" ]; then
-  echo "    [ERROR] Config directory not found: ${KLIPPER_CONFIG_HOMES[$idx]}"
+ if [ ! -d "$config_home" ]; then
+  echo "    [ERROR] Config directory not found: $config_home"
   return 1
  fi
 
- if [ ! -f "${MOONRAKER_CONFIG_DIRS[$idx]}/moonraker.conf" ]; then
-  echo "    [ERROR] moonraker.conf not found: ${MOONRAKER_CONFIG_DIRS[$idx]}/moonraker.conf"
+ if [ ! -f "${m_config}/moonraker.conf" ]; then
+  echo "    [ERROR] moonraker.conf not found: ${m_config}/moonraker.conf"
   return 1
  fi
 
- if [ ! -d "${MOONRAKER_HOMES[$idx]}" ]; then
-  echo "    [WARNING] Moonraker home not found: ${MOONRAKER_HOMES[$idx]}"
+ if [ ! -d "$m_home" ]; then
+  echo "    [WARNING] Moonraker home not found: $m_home"
   echo "    [INFO] Will try to use shared moonraker components"
  fi
 
- echo "    [OK] Config: ${KLIPPER_CONFIG_HOMES[$idx]}"
- echo "    [OK] Moonraker: ${MOONRAKER_HOMES[$idx]}"
+ echo "    [OK] Config: $config_home"
+ echo "    [OK] Moonraker: $m_home"
  return 0
 }
 
 # Install shared components (run once)
 install_shared() {
  echo ""
- echo "╔══════════════════════════════════════════════════════════════════════════════╗"
- echo "║                      INSTALLING SHARED COMPONENTS                            ║"
- echo "╚══════════════════════════════════════════════════════════════════════════════╝"
+ echo "=============================================="
+ echo "         INSTALLING SHARED COMPONENTS"
+ echo "=============================================="
  echo ""
 
  # Install requirements
@@ -457,13 +438,13 @@ install_shared() {
 
 # Install Moonraker component for specific instance
 install_moonraker_component() {
- local idx=$1
- local moonraker_home="${MOONRAKER_HOMES[$idx]}"
+ local idx="$1"
+ local m_home=$(get_instance_var "$idx" "MOONRAKER_HOME")
 
  echo -n "  Linking Moonraker component... "
 
  # Ensure destination directory exists
- local dest_dir="${moonraker_home}/moonraker/components"
+ local dest_dir="${m_home}/moonraker/components"
  if mkdir -p "${dest_dir}" 2>/dev/null; then
   if ln -sf "${SRCDIR}/moonraker/ace_status.py" "${dest_dir}/ace_status.py"; then
    echo "[OK]"
@@ -480,13 +461,16 @@ install_moonraker_component() {
 
 # Install for a specific instance
 install_instance() {
- local idx=$1
- local num="${INSTANCE_NUMS[$idx]}"
+ local idx="$1"
+ local num=$(get_instance_var "$idx" "INSTANCE_NUM")
+ local name=$(get_instance_var "$idx" "INSTANCE_NAME")
+ local config_home=$(get_instance_var "$idx" "KLIPPER_CONFIG_HOME")
+ local m_config=$(get_instance_var "$idx" "MOONRAKER_CONFIG_DIR")
 
  echo ""
- echo "╔══════════════════════════════════════════════════════════════════════════════╗"
- echo "║  Configuring: ${INSTANCE_NAMES[$idx]}"
- echo "╚══════════════════════════════════════════════════════════════════════════════╝"
+ echo "=============================================="
+ echo "  Configuring: $name"
+ echo "=============================================="
  echo ""
 
  # Verify instance
@@ -500,11 +484,11 @@ install_instance() {
 
  # Copy config file (per-instance)
  echo -n "  Copying ace.cfg... "
- if [ ! -f "${KLIPPER_CONFIG_HOMES[$idx]}/ace.cfg" ]; then
-  if cp "${SRCDIR}/ace.cfg" "${KLIPPER_CONFIG_HOMES[$idx]}/"; then
+ if [ ! -f "${config_home}/ace.cfg" ]; then
+  if cp "${SRCDIR}/ace.cfg" "${config_home}/"; then
    echo "[OK]"
    echo ""
-   echo "  [IMPORTANT] Edit ${KLIPPER_CONFIG_HOMES[$idx]}/ace.cfg"
+   echo "  [IMPORTANT] Edit ${config_home}/ace.cfg"
    echo "  [IMPORTANT] Set unique serial port for this instance!"
    echo ""
   else
@@ -515,9 +499,9 @@ install_instance() {
  fi
 
  # Add ace_status to moonraker.conf (per-instance)
- if ! grep -q "^\[ace_status\]" "${MOONRAKER_CONFIG_DIRS[$idx]}/moonraker.conf" 2>/dev/null; then
+ if ! grep -q "^\[ace_status\]" "${m_config}/moonraker.conf" 2>/dev/null; then
   echo -n "  Adding [ace_status] to moonraker.conf... "
-  printf "\n[ace_status]\n" >> "${MOONRAKER_CONFIG_DIRS[$idx]}/moonraker.conf" && echo "[OK]" || echo "[FAILED]"
+  printf "\n[ace_status]\n" >> "${m_config}/moonraker.conf" && echo "[OK]" || echo "[FAILED]"
  else
   echo "  [ace_status] already in moonraker.conf [SKIP]"
  fi
@@ -525,12 +509,12 @@ install_instance() {
  # Add update manager (per-instance, with unique name)
  local updater_name="ValgACE"
  if [ "$num" -ne 0 ]; then
-  updater_name="ValgACE_${INSTANCE_NAMES[$idx]}"
+  updater_name="ValgACE_${name}"
  fi
 
- if ! grep -q "\[update_manager ${updater_name}\]" "${MOONRAKER_CONFIG_DIRS[$idx]}/moonraker.conf" 2>/dev/null; then
+ if ! grep -q "\[update_manager ${updater_name}\]" "${m_config}/moonraker.conf" 2>/dev/null; then
   echo -n "  Adding update manager [${updater_name}]... "
-  cat << EOF >> "${MOONRAKER_CONFIG_DIRS[$idx]}/moonraker.conf"
+  cat << EOF >> "${m_config}/moonraker.conf"
 
 [update_manager ${updater_name}]
 type: git_repo
@@ -545,41 +529,44 @@ EOF
  fi
 
  echo ""
- echo "  [SUCCESS] Configured ${INSTANCE_NAMES[$idx]}"
+ echo "  [SUCCESS] Configured $name"
  return 0
 }
 
 # Uninstall from instance
 uninstall_instance() {
- local idx=$1
- local num="${INSTANCE_NUMS[$idx]}"
+ local idx="$1"
+ local num=$(get_instance_var "$idx" "INSTANCE_NUM")
+ local name=$(get_instance_var "$idx" "INSTANCE_NAME")
+ local config_home=$(get_instance_var "$idx" "KLIPPER_CONFIG_HOME")
+ local m_config=$(get_instance_var "$idx" "MOONRAKER_CONFIG_DIR")
+ local m_home=$(get_instance_var "$idx" "MOONRAKER_HOME")
 
  echo ""
- echo "╔══════════════════════════════════════════════════════════════════════════════╗"
- echo "║  Uninstalling from: ${INSTANCE_NAMES[$idx]}"
- echo "╚══════════════════════════════════════════════════════════════════════════════╝"
+ echo "=============================================="
+ echo "  Uninstalling from: $name"
+ echo "=============================================="
  echo ""
 
  # Remove ace.cfg
- if [ -f "${KLIPPER_CONFIG_HOMES[$idx]}/ace.cfg" ]; then
-  rm -f "${KLIPPER_CONFIG_HOMES[$idx]}/ace.cfg" && echo "  [OK] Removed ace.cfg"
+ if [ -f "${config_home}/ace.cfg" ]; then
+  rm -f "${config_home}/ace.cfg" && echo "  [OK] Removed ace.cfg"
  else
   echo "  [SKIP] ace.cfg not found"
  fi
 
  # Remove Moonraker component (only if separate moonraker home)
- local moonraker_home="${MOONRAKER_HOMES[$idx]}"
- local component_file="${moonraker_home}/moonraker/components/ace_status.py"
+ local component_file="${m_home}/moonraker/components/ace_status.py"
  if [ -L "$component_file" ] || [ -f "$component_file" ]; then
   rm -f "$component_file" && echo "  [OK] Removed Moonraker component"
  fi
 
  # Remove ace_status from moonraker.conf
- local config_file="${MOONRAKER_CONFIG_DIRS[$idx]}/moonraker.conf"
+ local config_file="${m_config}/moonraker.conf"
  if grep -q "^\[ace_status\]" "$config_file" 2>/dev/null; then
   # Create backup
   cp "$config_file" "${config_file}.bak"
-  # Remove the section
+  # Remove the section (simple line removal)
   sed -i '/^\[ace_status\]/d' "$config_file" 2>/dev/null ||    grep -v "^\[ace_status\]" "$config_file" > "${config_file}.tmp" && mv "${config_file}.tmp" "$config_file"
   echo "  [OK] Removed [ace_status] from moonraker.conf"
  fi
@@ -587,25 +574,23 @@ uninstall_instance() {
  # Remove update manager section
  local updater_name="ValgACE"
  if [ "$num" -ne 0 ]; then
-  updater_name="ValgACE_${INSTANCE_NAMES[$idx]}"
+  updater_name="ValgACE_${name}"
  fi
  if grep -q "\[update_manager ${updater_name}\]" "$config_file" 2>/dev/null; then
-  # This is more complex - need to remove section with its content
-  # Simple approach: backup and notify user
   echo "  [INFO] Update manager [${updater_name}] section found in moonraker.conf"
   echo "  [INFO] Please remove it manually or edit ${config_file}"
  fi
 
  echo ""
- echo "  [SUCCESS] Uninstalled from ${INSTANCE_NAMES[$idx]}"
+ echo "  [SUCCESS] Uninstalled from $name"
 }
 
 # Uninstall shared components
 uninstall_shared() {
  echo ""
- echo "╔══════════════════════════════════════════════════════════════════════════════╗"
- echo "║                      UNINSTALLING SHARED COMPONENTS                          ║"
- echo "╚══════════════════════════════════════════════════════════════════════════════╝"
+ echo "=============================================="
+ echo "         UNINSTALLING SHARED COMPONENTS"
+ echo "=============================================="
  echo ""
 
  local removed=0
@@ -629,27 +614,30 @@ uninstall_shared() {
 
 # Restart services for an instance
 restart_instance_services() {
- local idx=$1
+ local idx="$1"
+ local name=$(get_instance_var "$idx" "INSTANCE_NAME")
+ local k_service=$(get_instance_var "$idx" "KLIPPER_SERVICE")
+ local m_service=$(get_instance_var "$idx" "MOONRAKER_SERVICE")
 
  echo ""
- echo "  Restarting services for ${INSTANCE_NAMES[$idx]}..."
+ echo "  Restarting services for $name..."
 
- echo -n "    Stopping Klipper (${KLIPPER_SERVICES[$idx]})... "
- if sudo systemctl stop "${KLIPPER_SERVICES[$idx]}" 2>/dev/null; then
+ echo -n "    Stopping Klipper ($k_service)... "
+ if sudo systemctl stop "$k_service" 2>/dev/null; then
   echo "[OK]"
  else
   echo "[WARNING]"
  fi
 
- echo -n "    Restarting Moonraker (${MOONRAKER_SERVICES[$idx]})... "
- if sudo systemctl restart "${MOONRAKER_SERVICES[$idx]}" 2>/dev/null; then
+ echo -n "    Restarting Moonraker ($m_service)... "
+ if sudo systemctl restart "$m_service" 2>/dev/null; then
   echo "[OK]"
  else
   echo "[WARNING]"
  fi
 
- echo -n "    Starting Klipper (${KLIPPER_SERVICES[$idx]})... "
- if sudo systemctl start "${KLIPPER_SERVICES[$idx]}" 2>/dev/null; then
+ echo -n "    Starting Klipper ($k_service)... "
+ if sudo systemctl start "$k_service" 2>/dev/null; then
   echo "[OK]"
  else
   echo "[WARNING]"
@@ -659,33 +647,32 @@ restart_instance_services() {
 # Main execution
 main() {
  echo ""
- echo "╔══════════════════════════════════════════════════════════════════════════════╗"
- echo "║           ValgACE Multi-Instance Installer v${VERSION}"
- echo "╚══════════════════════════════════════════════════════════════════════════════╝"
+ echo "=============================================="
+ echo "   ValgACE Multi-Instance Installer v${VERSION}"
+ echo "=============================================="
  echo ""
 
  # Check root (only for non-MIPS)
- if [ "$IS_MIPS" -ne 1 ] && [ "$EUID" -eq 0 ]; then
+ if [ "$IS_MIPS" -ne 1 ] && [ "$(id -u)" -eq 0 ]; then
   echo "  [ERROR] Do not run as root"
   exit 1
  fi
 
  # Detect all instances
  detect_instances
- TOTAL_INSTANCES=$?
 
  # Show detected instances
- if ! show_instances_table $TOTAL_INSTANCES; then
+ if ! show_instances_table; then
   exit 1
  fi
 
  # Get instances to process
  if [ "$INTERACTIVE" -eq 1 ] && [ "$ALL_INSTANCES" -eq 0 ] && [ "$INSTANCE_SPEC" = "auto" ]; then
   # Interactive mode
-  select_instances_interactive $TOTAL_INSTANCES
+  select_instances_interactive
  else
   # Non-interactive mode
-  parse_instances "$INSTANCE_SPEC" $TOTAL_INSTANCES
+  parse_instances "$INSTANCE_SPEC"
  fi
 
  if [ -z "$SELECTED_INDICES" ]; then
@@ -694,13 +681,14 @@ main() {
  fi
 
  # Show final selection
- echo "╔══════════════════════════════════════════════════════════════════════════════╗"
- echo "║                         FINAL SELECTION                                      ║"
- echo "╚══════════════════════════════════════════════════════════════════════════════╝"
+ echo "=============================================="
+ echo "              FINAL SELECTION"
+ echo "=============================================="
  echo ""
  echo "  Will $([ "$UNINSTALL" -eq 1 ] && echo "UNINSTALL from" || echo "INSTALL to"):"
  for idx in $SELECTED_INDICES; do
-  echo "    • ${INSTANCE_NAMES[$idx]}"
+  local name=$(get_instance_var "$idx" "INSTANCE_NAME")
+  echo "    - $name"
  done
  echo ""
 
@@ -711,7 +699,7 @@ main() {
   # Uninstall mode
   uninstall_shared
 
-  for idx in $SELECTED_INDICES; do
+ for idx in $SELECTED_INDICES; do
    uninstall_instance "$idx"
   done
  else
@@ -724,18 +712,18 @@ main() {
 
   # Restart services for each instance
   echo ""
-  echo "╔══════════════════════════════════════════════════════════════════════════════╗"
-  echo "║                      RESTARTING SERVICES                                       ║"
-  echo "╚══════════════════════════════════════════════════════════════════════════════╝"
+  echo "=============================================="
+  echo "            RESTARTING SERVICES"
+  echo "=============================================="
   for idx in $SELECTED_INDICES; do
    restart_instance_services "$idx"
   done
  fi
 
  echo ""
- echo "╔══════════════════════════════════════════════════════════════════════════════╗"
- echo "║                     OPERATION COMPLETED                                      ║"
- echo "╚══════════════════════════════════════════════════════════════════════════════╝"
+ echo "=============================================="
+ echo "            OPERATION COMPLETED"
+ echo "=============================================="
  echo ""
 
  if [ "$UNINSTALL" -ne 1 ]; then
