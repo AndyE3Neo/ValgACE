@@ -2323,7 +2323,7 @@ Debug:
         try:
             idle_timeout = self.printer.lookup_object('idle_timeout')
             state = idle_timeout.get_status(eventtime=self.reactor.monotonic()).get('state', 'idle')
-            return state == 'Printing'
+            return state == 'printing'
         except Exception:
             return False
 
