@@ -1423,7 +1423,8 @@ class ValgAce:
         3. Poll slot status until it becomes 'ready'
         4. Start traditional parking (feed_assist)
         """
-        self.logger.info(f"Starting distance-based parking for slot {index}")
+        parking_mode = "infinity spool" if self.ins_spool_work else "normal toolchange"
+        self.logger.info(f"Starting distance-based parking for slot {index} ({parking_mode})")
 
         # Set parking flags
         self._park_in_progress = True
@@ -1435,11 +1436,16 @@ class ValgAce:
         self._sensor_parking_completed = False
 
         # Calculate feed distance: max_parking_distance - 20 mm
+        # max_parking_distance используется единообразно для обоих режимов (обычная смена/infinity spool)
+        # max_parking_distance is used uniformly for both modes (normal toolchange/infinity spool)
         feed_distance = max(self.max_parking_distance - 20, 10)  # Minimum 10mm
         # Calculate wait time: max_parking_distance / parking_speed seconds
         wait_time = self.max_parking_distance / self.parking_speed
         
-        self.logger.info(f"Distance-based parking: feeding {feed_distance}mm, wait time {wait_time:.1f}s")
+        self.logger.info(
+            f"Distance-based parking ({parking_mode}): feeding {feed_distance}mm "
+            f"(max_parking_distance={self.max_parking_distance}mm), wait time {wait_time:.1f}s at {self.parking_speed}mm/s"
+        )
 
         # Start feeding filament
         def start_feed_callback(response):
@@ -1523,8 +1529,14 @@ class ValgAce:
         self._sensor_parking_completed = False
 
         # Calculate timeout: (max_parking_distance / parking_speed) + extended_park_time seconds
+        # max_parking_distance используется единообразно для обоих режимов (обычная смена/infinity spool)
+        # max_parking_distance is used uniformly for both modes (normal toolchange/infinity spool)
+        parking_mode = "infinity spool" if self.ins_spool_work else "normal toolchange"
         timeout_duration = (self.max_parking_distance / self.parking_speed) + self.extended_park_time
-        self.logger.info(f"Sensor-based parking timeout: {timeout_duration:.1f}s")
+        self.logger.info(
+            f"Sensor-based parking ({parking_mode}): feeding up to {self.max_parking_distance}mm "
+            f"at {self.parking_speed}mm/s, timeout {timeout_duration:.1f}s"
+        )
         
         # Start feeding filament at parking_speed
         def start_feed_callback(response):
@@ -1730,14 +1742,25 @@ class ValgAce:
         self._park_start_time = self.reactor.monotonic()
         self._park_count_increased = False
 
+        # Режим парковки (обычная смена инструмента или infinity spool) определяется флагом
+        # ins_spool_work, но max_parking_distance является единым для обоих сценариев
+        # Parking mode (normal toolchange or infinity spool) is tracked via ins_spool_work,
+        # but max_parking_distance is unified for both scenarios
+        parking_mode = "infinity spool" if self.ins_spool_work else "normal toolchange"
+        self.logger.info(
+            f"_park_to_toolhead: mode={parking_mode}, slot={index}, "
+            f"max_parking_distance={self.max_parking_distance}mm, parking_speed={self.parking_speed}mm/s, "
+            f"max_parking_timeout={self.max_parking_timeout}s, extended_park_time={self.extended_park_time}s"
+        )
+
         # Check if aggressive parking should be used
         if self.aggressive_parking:
             # Check if filament sensor is configured and available
             if self.filament_sensor:
-                self.logger.info(f"Using sensor-based aggressive parking for slot {index}")
+                self.logger.info(f"Using sensor-based aggressive parking for slot {index} ({parking_mode})")
                 self._sensor_based_parking(index)
             else:
-                self.logger.info(f"Using distance-based aggressive parking for slot {index} (no filament sensor)")
+                self.logger.info(f"Using distance-based aggressive parking for slot {index} ({parking_mode}, no filament sensor)")
                 self._distance_based_parking(index)
         else:
             self.logger.info(f"Starting traditional parking for slot {index}")
