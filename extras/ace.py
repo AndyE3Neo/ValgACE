@@ -1796,6 +1796,29 @@ class ValgAce:
             # При работе infinity spool ретракт не выполняется - филамент уже закончился
             # When infinity spool is working, skip retract - filament is already empty
             if not self.ins_spool_work:
+                # Страховка: если feed assist всё ещё активен для предыдущего слота
+                # (например, PRE_TOOLCHANGE макрос не отключил его), отключаем его
+                # перед ретрактом, иначе ACE будет продолжать подавать филамент
+                # одновременно с обратной перемоткой.
+                # Safety net: if feed assist is still active for the previous slot
+                # (e.g. the PRE_TOOLCHANGE macro didn't disable it), disable it
+                # before retracting, otherwise ACE would keep feeding filament
+                # while we try to rewind it.
+                if self._feed_assist_index == was or self._feed_assist_index == real_was:
+                    self.logger.info(f"Feed assist still active for index {self._feed_assist_index}, disabling before retraction")
+
+                    def stop_feed_assist_callback(response):
+                        if response.get('code', 0) != 0:
+                            self.logger.warning(f"Failed to disable feed assist before retraction: {response.get('msg', 'Unknown error')}")
+
+                    self.send_request({
+                        "method": "stop_feed_assist",
+                        "params": {"index": real_was}
+                    }, stop_feed_assist_callback)
+                    self._feed_assist_index = -1
+                    if self.toolhead:
+                        self.toolhead.dwell(0.3)
+
                 # Retract current tool first (используем реальный слот)
                 # Retract current tool first (use real slot)
                 self.logger.info(f"Retracting from real slot {real_was} (Klipper index {was})")
