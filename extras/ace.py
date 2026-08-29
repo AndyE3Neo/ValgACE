@@ -1806,10 +1806,15 @@ class ValgAce:
                 # while we try to rewind it.
                 if self._feed_assist_index == was or self._feed_assist_index == real_was:
                     self.logger.info(f"Feed assist still active for index {self._feed_assist_index}, disabling before retraction")
+
+                    def stop_feed_assist_callback(response):
+                        if response.get('code', 0) != 0:
+                            self.logger.warning(f"Failed to disable feed assist before retraction: {response.get('msg', 'Unknown error')}")
+
                     self.send_request({
                         "method": "stop_feed_assist",
                         "params": {"index": real_was}
-                    }, callback)
+                    }, stop_feed_assist_callback)
                     self._feed_assist_index = -1
                     if self.toolhead:
                         self.toolhead.dwell(0.3)
